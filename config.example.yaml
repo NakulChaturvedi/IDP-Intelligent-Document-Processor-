@@ -1,0 +1,62 @@
+# ── PO Processor — Azure Edition ──────────────────────────────────────────────
+
+# Folder paths
+folders:
+  po_input:   "C:/po_processor/input"
+  templates:  "C:/Users/nakul/Downloads/po-templates"
+  output:     "C:/Users/nakul/Downloads"
+
+# Template scanner settings
+template:
+  sheet_name:        "PO Summary"
+  line_items_anchor: "Quantity"
+  skip_labels:
+    - "PURCHASE ORDER — EXTRACTED DATA"
+    - "PURCHASE ORDER - EXTRACTED DATA"
+    - "LINE ITEMS"
+    - "Field"
+    - "Value"
+    - "Confidence"
+    - "Confidence color guide"
+  skip_prefixes:
+    - "Confidence color guide"
+    - "Green ="
+    - "Yellow ="
+    - "Red ="
+
+# ── Azure Model definitions ────────────────────────────────────────────────────
+# provider: mistral_azure | openai_azure | phi_azure | llama_azure
+# All models require: endpoint + api_key
+# mistral_azure uses the OCR annotation API (native PDF support)
+# openai_azure / phi_azure / llama_azure use chat completions (text extraction)
+
+models:
+
+  mistral_azure:
+    provider:     mistral_azure
+    display_name: "Mistral Document AI"
+    endpoint:     "https://idp--trial-resource.services.ai.azure.com/providers/mistral/azure/ocr"
+    api_key:      "4e6zHtAGe6xWW4H46aAkoezXCJB21YWAVSzhZ7WfwVAPtsHHTQkgJQQJ99CCACHYHv6XJ3w3AAAAACOGNQ9G"
+    model_name:   "mistral-document-ai-2512"
+    timeout:      300
+    retries:      3
+
+  cohere_azure:
+    provider:     cohere_azure
+    display_name: "Cohere Command R+ (Azure)"
+    endpoint:     "https://idp-azure-repo-resource.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
+    api_key:      "9d3sc9IC1lyeRpm8E508cupcZVIOp169TAQw85cRs5KROMhWSSO7JQQJ99CEACfhMk5XJ3w3AAAAACOGK0hx"
+    model_name:   "cohere-command-a"
+    timeout:      120
+    retries:      3
+
+
+
+  llama_azure:
+    provider:     llama_azure
+    display_name: "Llama-4-17B(Azure)"
+    endpoint:     "https://idp-azure-repo-resource.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
+    api_key:      "9d3sc9IC1lyeRpm8E508cupcZVIOp169TAQw85cRs5KROMhWSSO7JQQJ99CEACfhMk5XJ3w3AAAAACOGK0hx"
+    model_name:   "Llama-4-Scout-17B-16E-Instruct"
+    timeout:      120
+    retries:      3
