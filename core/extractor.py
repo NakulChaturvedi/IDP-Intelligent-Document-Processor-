@@ -164,9 +164,9 @@ def _build_schema_instruction(positions: dict) -> str:
 
 # ── Company detection ─────────────────────────────────────────────────────────
 
-def detect_company_from_pdf(pdf_path: str, model_cfg: dict) -> str:
+def detect_company_from_pdf(pdf_path: str, model_cfg: dict = None) -> str:
     """
-    Extract the buying company name from a PO PDF using text parsing.
+    Extract the buying/issuing company name from a PO PDF using text parsing.
     No model call needed — reads first meaningful line or Ship To section.
     """
     import pdfplumber
@@ -185,20 +185,15 @@ def detect_company_from_pdf(pdf_path: str, model_cfg: dict) -> str:
     lines = [l.strip() for l in text.split("\n") if l.strip()]
 
     def is_company_line(line):
-        if len(line) < 4:
-            return False
-        if re.match(r'^[\d\s\/\-\.\,]+$', line):
-            return False
-        if line.lower().rstrip(":") in skip_words:
-            return False
+        if len(line) < 4: return False
+        if re.match(r'^[\d\s\/\-\.\,]+$', line): return False
+        if line.lower().rstrip(":") in skip_words: return False
         if any(line.lower().startswith(w) for w in
-               ["phone", "fax", "attn", "http", "www", "po box",
-                "p.o. box", "gst", "hst", "pst"]):
+               ["phone","fax","attn","http","www","po box","p.o. box","gst","hst","pst"]):
             return False
         if re.search(r'\d{3,}', line) and any(
-            w in line.lower() for w in ["st.", "ave", "blvd", "rd", "drive", "way"]
-        ):
-            return False
+            w in line.lower() for w in ["st.","ave","blvd","rd","drive","way"]
+        ): return False
         return True
 
     # Strategy 1 — company name near top of document
@@ -207,7 +202,12 @@ def detect_company_from_pdf(pdf_path: str, model_cfg: dict) -> str:
             if (re.search(r'\b(inc|ltd|llc|corp|limited|company|consultants|associates|brooks)\b',
                           line, re.IGNORECASE)
                     or (line.isupper() and len(line.split()) >= 2)):
-                return line
+                # Strip trailing generic document words
+                cleaned = re.sub(
+                    r'\s+(purchase\s+order|invoice|quotation|order|po|page|date).*$',
+                    '', line, flags=re.IGNORECASE
+                ).strip()
+                return cleaned
 
     # Strategy 2 — find Ship To label
     for i, line in enumerate(lines):
@@ -215,20 +215,17 @@ def detect_company_from_pdf(pdf_path: str, model_cfg: dict) -> str:
             parts = re.split(r'ship\s*to\s*:?\s*', line, flags=re.IGNORECASE)
             if len(parts) > 1 and is_company_line(parts[-1].strip()):
                 return parts[-1].strip()
-            for j in range(i + 1, min(i + 4, len(lines))):
+            for j in range(i+1, min(i+4, len(lines))):
                 candidate = lines[j].strip()
                 parts = re.split(r'\s{3,}|\t', candidate)
                 right = parts[-1].strip() if len(parts) >= 2 else candidate
-                if is_company_line(right):
-                    return right
+                if is_company_line(right): return right
 
     # Strategy 3 — first meaningful line
     for line in lines:
-        if is_company_line(line):
-            return line
+        if is_company_line(line): return line
 
     return ""
-
 
 # ── Mistral Azure — native PDF OCR ────────────────────────────────────────────
 
@@ -483,8 +480,17 @@ PROVIDERS: dict[str, Any] = {
 }
 
 
-def extract(pdf_path: str, model_cfg: dict, prompt: str, positions: dict = None) -> dict:
-    """Route extraction to the correct Azure provider."""
+def extract(pdf_path: str, model_cfg: dict, prompt: str, positions: dict = None, schema: dict = None) -> dict:
+    """Route extraction to the correct Azure provider.
+
+    Args:
+        pdf_path:   Path to the PO PDF.
+        model_cfg:  Model config dict from config.yaml.
+        prompt:     Extraction prompt (built by build_prompt or a mini-prompt).
+        positions:  Template positions dict from scan_template (drives normalization).
+        schema:     Optional pre-built JSON schema. If omitted, each provider builds
+                    its own schema from positions (the normal flow).
+    """
     provider = model_cfg.get("provider")
     if provider not in PROVIDERS:
         raise ValueError(

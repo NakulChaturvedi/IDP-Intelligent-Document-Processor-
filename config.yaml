@@ -1,12 +1,17 @@
-# ── PO Processor — Azure Edition ──────────────────────────────────────────────
+# ── PO Processor — Azure Configuration ────────────────────────────────────────
 
-# Folder paths
 folders:
   po_input:   "C:/po_processor/input"
-  templates:  "C:/Users/nakul/Downloads/po-templates"
-  output:     "C:/Users/nakul/Downloads"
+  templates:  "C:/Users/nakul/Downloads/po-templates"   # subfolders named after companies
+  output:     "C:/po_processor/output"
 
-# Template scanner settings
+security:
+  enabled: true
+  usage_log: "C:/Users/nakul/Downloads/po_usage_log.xlsx"
+  tokens:
+    "364ecb993b7de7e25b2df125263993526da904c461f18a9418b7ea8ab8c72713": "nakul"
+    "YOUR_MANAGER_TOKEN_HASH_HERE": "manager"
+
 template:
   sheet_name:        "PO Summary"
   line_items_anchor: "Quantity"
@@ -24,17 +29,10 @@ template:
     - "Yellow ="
     - "Red ="
 
-# ── Azure Model definitions ────────────────────────────────────────────────────
-# provider: mistral_azure | openai_azure | phi_azure | llama_azure
-# All models require: endpoint + api_key
-# mistral_azure uses the OCR annotation API (native PDF support)
-# openai_azure / phi_azure / llama_azure use chat completions (text extraction)
-
 models:
-
   mistral_azure:
     provider:     mistral_azure
-    display_name: "Mistral Document AI"
+    display_name: "Mistral Document AI (Azure)"
     endpoint:     "https://idp--trial-resource.services.ai.azure.com/providers/mistral/azure/ocr"
     api_key:      "4e6zHtAGe6xWW4H46aAkoezXCJB21YWAVSzhZ7WfwVAPtsHHTQkgJQQJ99CCACHYHv6XJ3w3AAAAACOGNQ9G"
     model_name:   "mistral-document-ai-2512"
@@ -49,8 +47,6 @@ models:
     model_name:   "cohere-command-a"
     timeout:      120
     retries:      3
-
-
 
   llama_azure:
     provider:     llama_azure

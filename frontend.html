@@ -217,8 +217,16 @@
 
 <script>
 const API = 'http://localhost:8001';
+const TOKEN = 'po-VWEhVDTOQCJ5Ys9hgvOkUxACHaFMPmpGzeHjIR8YNPQ'
 let selectedModel = null;
 let currentMode   = 'single';
+
+function authHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${TOKEN}`,
+  };
+}
 
 async function init() {
   try {
@@ -287,11 +295,12 @@ async function detectCompany() {
   log('Detecting company name...', 'info');
 
   try {
-    const r    = await fetch(`${API}/detect-company`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ customer_po_path: poPath, model: selectedModel }),
-    });
+    const r = await fetch(`${API}/detect-company`, {
+  method: 'POST',
+  headers: authHeaders(),
+  body: JSON.stringify({ customer_po_path: poPath, model: selectedModel }),
+});
+
     const data = await r.json();
     if (!r.ok) { log(`Error: ${data.detail}`, 'err'); return; }
 
@@ -299,18 +308,18 @@ async function detectCompany() {
     document.getElementById('companyNameDisplay').textContent = data.company_name || 'Unknown';
 
     const tmplEl = document.getElementById('templateMatchDisplay');
-    if (data.template_matched) {
-      tmplEl.innerHTML = `Template matched: <span>${data.template_name}</span> (score: ${data.match_score})`;
-      document.getElementById('templatePath').value = data.template_path;
+    if (data.template_found) {
+      tmplEl.innerHTML = `Template matched: <span>${data.template_found}</span>`;
+      document.getElementById('templatePath').value = data.template_found;
     } else {
-      tmplEl.innerHTML = `<span style="color:var(--danger)">No template matched.</span> Available: ${data.all_templates.join(', ') || 'none'}`;
+      tmplEl.innerHTML = `<span style="color:var(--danger)">No template matched.</span> Add a subfolder named after the company in your templates folder.`;
     }
 
     document.getElementById('step2Fields').style.display = 'flex';
     document.getElementById('step1dot').className = 'step-dot done';
     document.getElementById('stepLine').className = 'step-line done';
     document.getElementById('step2dot').className = 'step-dot active';
-    log(`✓ Company: ${data.company_name} | Template: ${data.template_name || 'not found'}`, 'ok');
+    log(`✓ Company: ${data.company_name} | Template: ${data.template_found || 'not found'}`, 'ok');
   } finally {
     btn.classList.remove('loading'); btn.disabled = false;
   }
@@ -326,9 +335,9 @@ async function processPO() {
   log(`Processing with ${selectedModel}...`, 'info');
 
   try {
-    const r    = await fetch(`${API}/process-customer-po`, {
+    const r    = await fetch(`${API}/process`, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: authHeaders(),
       body: JSON.stringify({
         customer_po_path:          poPath,
         customer_po_template_path: tmplPath || null,
@@ -358,9 +367,9 @@ async function runBatch() {
   log(`Starting batch with ${selectedModel}...`, 'info');
 
   try {
-    const r    = await fetch(`${API}/batch-customer-po`, {
+    const r    = await fetch(`${API}/batch`, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: authHeaders(),
       body: JSON.stringify(body),
     });
     const data = await r.json();
