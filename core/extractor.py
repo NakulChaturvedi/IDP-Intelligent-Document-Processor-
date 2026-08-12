@@ -162,11 +162,11 @@ def _build_schema_instruction(positions: dict) -> str:
     )
 
 
-# ── Company detection ─────────────────────────────────────────────────────────
+# ── Company detection ──────────────────────────────────────────────────────────
 
-def detect_company_from_pdf(pdf_path: str, model_cfg: dict) -> str:
+def detect_company_from_pdf(pdf_path: str, model_cfg: dict = None) -> str:
     """
-    Extract the buying company name from a PO PDF using text parsing.
+    Extract the buying/issuing company name from a PO PDF using text parsing.
     No model call needed — reads first meaningful line or Ship To section.
     """
     import pdfplumber
@@ -192,8 +192,7 @@ def detect_company_from_pdf(pdf_path: str, model_cfg: dict) -> str:
         if line.lower().rstrip(":") in skip_words:
             return False
         if any(line.lower().startswith(w) for w in
-               ["phone", "fax", "attn", "http", "www", "po box",
-                "p.o. box", "gst", "hst", "pst"]):
+               ["phone", "fax", "attn", "http", "www", "po box", "p.o. box", "gst", "hst", "pst"]):
             return False
         if re.search(r'\d{3,}', line) and any(
             w in line.lower() for w in ["st.", "ave", "blvd", "rd", "drive", "way"]
@@ -207,7 +206,11 @@ def detect_company_from_pdf(pdf_path: str, model_cfg: dict) -> str:
             if (re.search(r'\b(inc|ltd|llc|corp|limited|company|consultants|associates|brooks)\b',
                           line, re.IGNORECASE)
                     or (line.isupper() and len(line.split()) >= 2)):
-                return line
+                cleaned = re.sub(
+                    r'\s+(purchase\s+order|invoice|quotation|order|po|page|date).*$',
+                    '', line, flags=re.IGNORECASE
+                ).strip()
+                return cleaned
 
     # Strategy 2 — find Ship To label
     for i, line in enumerate(lines):
@@ -230,30 +233,32 @@ def detect_company_from_pdf(pdf_path: str, model_cfg: dict) -> str:
     return ""
 
 
-# ── Mistral Azure — native PDF OCR ────────────────────────────────────────────
+# ── Mistral Azure — Document AI with chat completions fallback ─────────────────
 
 def _extract_mistral_azure(pdf_path: str, model_cfg: dict, prompt: str, positions: dict = None) -> dict:
-    """Mistral Document AI on Azure — uses native OCR annotation API."""
+    """Mistral on Azure — tries Document AI annotation first, falls back to chat completions."""
     pdf_b64 = base64.standard_b64encode(Path(pdf_path).read_bytes()).decode("utf-8")
-
-    schema = _build_mistral_schema(positions)
-
     headers = {
         "Content-Type":  "application/json",
         "Authorization": f"Bearer {model_cfg['api_key']}",
     }
+
+    # ── Attempt 1: Document AI annotation API ─────────────────────────────────
+    schema  = _build_mistral_schema(positions)
     payload = {
         "model": model_cfg["model_name"],
         "document": {
             "type":         "document_url",
             "document_url": f"data:application/pdf;base64,{pdf_b64}",
         },
-        "document_annotation_prompt": prompt,
         "document_annotation_format": schema,
+        "document_annotation_prompt": prompt,   # may be rejected on older Azure deployments
         "include_image_base64":       False,
     }
 
-    def call():
+    ocr_text = None
+
+    def call_annotation():
         resp = requests.post(
             model_cfg["endpoint"].rstrip("/"),
             headers=headers,
@@ -262,12 +267,78 @@ def _extract_mistral_azure(pdf_path: str, model_cfg: dict, prompt: str, position
         )
         return resp.text, resp.status_code
 
-    raw, _ = _retry(call, model_cfg.get("retries", 3))
-    data   = json.loads(raw)
-    ann    = data.get("document_annotation")
-    if not ann:
-        raise ValueError("No document_annotation in Azure response.")
-    result = json.loads(ann) if isinstance(ann, str) else ann
+    try:
+        raw, status = call_annotation()
+
+        if status == 422 and "extra_forbidden" in raw:
+            # Older Azure deployment — strip the prompt field and retry
+            print("  [mistral_azure] document_annotation_prompt rejected — retrying without it")
+            payload.pop("document_annotation_prompt")
+            raw, status = call_annotation()
+
+        if status != 200:
+            raise RuntimeError(f"API call failed [{status}]: {raw}")
+
+        data = json.loads(raw)
+        ann  = data.get("document_annotation")
+
+        if ann:
+            result = json.loads(ann) if isinstance(ann, str) else ann
+            return _normalize_response(result, positions, estimate_confidence=False)
+
+        # Annotation empty — extract OCR text from pages for fallback
+        print("  [mistral_azure] No document_annotation in response — falling back to OCR text + chat")
+        ocr_text = "\n\n".join(p.get("markdown", "") for p in data.get("pages", []))
+
+    except Exception as e:
+        print(f"  [mistral_azure] Annotation API failed ({e}) — falling back to chat completions")
+        ocr_text = None
+
+    # ── Attempt 2: Chat completions fallback ──────────────────────────────────
+    if not ocr_text:
+        ocr_text = _extract_pdf_text(pdf_path)
+
+    schema_instruction = _build_schema_instruction(positions)
+    chat_payload = {
+        "model": model_cfg["model_name"],
+        "messages": [
+            {
+                "role":    "system",
+                "content": "You are a purchase order data extraction assistant. Return valid JSON only.",
+            },
+            {
+                "role":    "user",
+                "content": (
+                    f"{prompt}\n\n{schema_instruction}\n\n"
+                    "Return ONLY valid JSON — no explanation, no markdown.\n\n"
+                    f"PURCHASE ORDER TEXT:\n{ocr_text}"
+                ),
+            },
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature":     0,
+    }
+
+    # Derive chat endpoint from OCR endpoint
+    chat_endpoint = model_cfg["endpoint"].rstrip("/")
+    if "/ocr" in chat_endpoint:
+        chat_endpoint = chat_endpoint.replace("/ocr", "/chat/completions")
+    elif not chat_endpoint.endswith("/chat/completions"):
+        chat_endpoint = chat_endpoint + "/chat/completions"
+
+    def call_chat():
+        resp = requests.post(
+            chat_endpoint,
+            headers=headers,
+            json=chat_payload,
+            timeout=model_cfg.get("timeout", 120),
+        )
+        return resp.text, resp.status_code
+
+    raw, _  = _retry(call_chat, model_cfg.get("retries", 3))
+    data    = json.loads(raw)
+    content = data["choices"][0]["message"]["content"]
+    result  = _parse_json(content)
     return _normalize_response(result, positions, estimate_confidence=False)
 
 
@@ -320,7 +391,7 @@ def _build_mistral_schema(positions: dict) -> dict:
 
 def _extract_openai_azure(pdf_path: str, model_cfg: dict, prompt: str, positions: dict = None) -> dict:
     """OpenAI GPT-4o on Azure — extracts text then uses chat completions."""
-    text              = _extract_pdf_text(pdf_path)
+    text               = _extract_pdf_text(pdf_path)
     schema_instruction = _build_schema_instruction(positions)
 
     headers = {
@@ -416,7 +487,6 @@ def _extract_llama_azure(pdf_path: str, model_cfg: dict, prompt: str, positions:
     text               = _extract_pdf_text(pdf_path)
     schema_instruction = _build_schema_instruction(positions)
 
-    # Build focused line items field list
     li_list = ""
     if positions:
         li_list = "\n".join(
@@ -467,23 +537,72 @@ def _extract_llama_azure(pdf_path: str, model_cfg: dict, prompt: str, positions:
     result  = _parse_json(content)
     return _normalize_response(result, positions, estimate_confidence=True)
 
+# ── OpenAI Azure — Responses API (/v1/responses endpoint) ────────────────────
 
-# ── Provider registry ─────────────────────────────────────────────────────────
-# Add new Azure providers here — key must match `provider` in config.yaml
+def _extract_openai_azure_responses(pdf_path: str, model_cfg: dict, prompt: str, positions: dict = None) -> dict:
+    """GPT-5.x on Azure using the new /v1/responses API (not chat completions)."""
+    text               = _extract_pdf_text(pdf_path)
+    schema_instruction = _build_schema_instruction(positions)
+
+    headers = {
+        "api-key":      model_cfg["api_key"],
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": model_cfg["model_name"],
+        "input": (
+            f"{prompt}\n\n{schema_instruction}\n\n"
+            "Return ONLY valid JSON — no explanation, no markdown.\n\n"
+            f"PURCHASE ORDER TEXT:\n{text}"
+        ),
+        "instructions": "You are a purchase order data extraction assistant. Always return valid JSON only.",
+        "text": {
+            "format": {
+                "type": "json_object",
+            }
+        },
+    }
+
+    def call():
+        resp = requests.post(
+            model_cfg["endpoint"],
+            headers=headers,
+            json=payload,
+            timeout=model_cfg.get("timeout", 120),
+        )
+        return resp.text, resp.status_code
+
+    raw, _  = _retry(call, model_cfg.get("retries", 3))
+    data    = json.loads(raw)
+
+    # Responses API returns output as a list of content blocks
+    try:
+        content = data["output"][0]["content"][0]["text"]
+    except (KeyError, IndexError):
+        raise RuntimeError(f"Unexpected Responses API response structure: {raw[:300]}")
+
+    result = _parse_json(content)
+    return _normalize_response(result, positions, estimate_confidence=False)
+
+# ── Provider registry ──────────────────────────────────────────────────────────
+
 def _extract_cohere_azure(pdf_path: str, model_cfg: dict, prompt: str, positions: dict = None) -> dict:
     """Cohere Command R+ on Azure — same interface as Llama Azure."""
     return _extract_llama_azure(pdf_path, model_cfg, prompt, positions)
 
+
 PROVIDERS: dict[str, Any] = {
     "mistral_azure": _extract_mistral_azure,
     "openai_azure":  _extract_openai_azure,
+    "openai_azure_responses":  _extract_openai_azure_responses,
     "phi_azure":     _extract_phi_azure,
     "llama_azure":   _extract_llama_azure,
-    "cohere_azure":  _extract_cohere_azure,   # ← add this
+    "cohere_azure":  _extract_cohere_azure,
 }
 
 
-def extract(pdf_path: str, model_cfg: dict, prompt: str, positions: dict = None) -> dict:
+def extract(pdf_path: str, model_cfg: dict, prompt: str, positions: dict = None, schema: dict = None) -> dict:
     """Route extraction to the correct Azure provider."""
     provider = model_cfg.get("provider")
     if provider not in PROVIDERS:
