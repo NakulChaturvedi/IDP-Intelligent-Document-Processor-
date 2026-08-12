@@ -5,76 +5,76 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>PO Processor — Azure</title>
 <style>
+
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
   :root {
     --bg:      #0d0f12; --surface: #141720; --border: #242836;
-    --accent:  #0078d4; --accent2: #38d9a9; --warn:   #ffd43b;
-    --danger:  #ff6b6b; --text:    #e8eaf0; --muted:  #5c6480;
+    --accent2: #38d9a9; --warn:   #ffd43b;
+    --danger:  #ff6b6b; --text:   #e8eaf0; --muted:  #5c6480;
     --mono: 'IBM Plex Mono', monospace; --sans: 'IBM Plex Sans', sans-serif;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; min-height: 100vh; display: flex; flex-direction: column; }
-
+  .token-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }
+  .token-overlay.hidden { display: none; }
+  .token-modal { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 32px; width: 420px; display: flex; flex-direction: column; gap: 20px; }
+  .token-modal h2 { font-family: var(--mono); font-size: 14px; font-weight: 600; letter-spacing: .1em; }
+  .token-modal p { font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .token-input-wrap { display: flex; flex-direction: column; gap: 8px; }
+  .token-input-wrap label { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .15em; color: var(--muted); text-transform: uppercase; }
+  .token-input-wrap input { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 10px 12px; outline: none; width: 100%; }
+  .token-error { color: var(--danger); font-family: var(--mono); font-size: 11px; display: none; }
+  .token-error.visible { display: block; }
+  .token-btn { border: none; border-radius: 3px; padding: 12px; font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; cursor: pointer; transition: all .15s; width: 100%; }
+  .token-btn .spinner { display: none; width: 13px; height: 13px; border-radius: 50%; animation: spin .7s linear infinite; margin: 0 auto; }
+  .token-btn.loading .spinner { display: block; }
+  .token-btn.loading .btn-text { display: none; }
+  .token-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 11px; }
+  .token-divider::before, .token-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
   header { border-bottom: 1px solid var(--border); padding: 16px 32px; display: flex; align-items: center; gap: 14px; background: var(--surface); }
-  .logo { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .15em; color: var(--accent); text-transform: uppercase; border: 1px solid var(--accent); padding: 4px 10px; }
+  .logo { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; border: 1px solid; padding: 4px 10px; }
   header h1 { font-family: var(--mono); font-size: 15px; font-weight: 500; }
-  .azure-badge { font-family: var(--mono); font-size: 10px; font-weight: 600; padding: 3px 9px; background: rgba(0,120,212,.15); color: var(--accent); border: 1px solid rgba(0,120,212,.3); border-radius: 2px; }
+  .hbadge { font-family: var(--mono); font-size: 10px; font-weight: 600; padding: 3px 9px; border-radius: 2px; }
   .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-left: auto; transition: background .3s; }
   .status-dot.online { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
   .status-dot.offline { background: var(--danger); }
   .status-label { font-family: var(--mono); font-size: 11px; color: var(--muted); }
-
+  .token-indicator { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 4px 10px; cursor: pointer; transition: all .15s; }
+  .token-indicator .ti-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent2); }
   main { display: grid; grid-template-columns: 400px 1fr; flex: 1; overflow: hidden; }
   .panel { border-right: 1px solid var(--border); overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 18px; }
   .results-panel { overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 14px; }
-
   .section-label { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .2em; color: var(--muted); text-transform: uppercase; margin-bottom: 8px; }
-
   .model-card { border: 1px solid var(--border); border-radius: 4px; padding: 12px 13px; cursor: pointer; transition: all .15s; display: flex; align-items: center; gap: 10px; }
-  .model-card:hover { border-color: var(--accent); background: rgba(0,120,212,.04); }
-  .model-card.active { border-color: var(--accent); background: rgba(0,120,212,.08); }
   .model-radio { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--muted); flex-shrink: 0; position: relative; }
-  .model-card.active .model-radio { border-color: var(--accent); }
-  .model-card.active .model-radio::after { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: var(--accent); }
   .model-info { flex: 1; }
   .model-name { font-family: var(--mono); font-size: 12px; font-weight: 500; margin-bottom: 2px; }
   .model-sub  { font-size: 11px; color: var(--muted); }
-  .model-badge { font-family: var(--mono); font-size: 9px; font-weight: 600; padding: 2px 7px; border-radius: 2px; text-transform: uppercase; background: rgba(0,120,212,.12); color: var(--accent); border: 1px solid rgba(0,120,212,.25); }
-
+  .model-badge { font-family: var(--mono); font-size: 9px; font-weight: 600; padding: 2px 7px; border-radius: 2px; text-transform: uppercase; }
   .tabs { display: flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
   .tab { flex: 1; padding: 9px; text-align: center; cursor: pointer; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: .1em; color: var(--muted); transition: all .15s; text-transform: uppercase; border: none; background: transparent; }
   .tab:first-child { border-right: 1px solid var(--border); }
-  .tab.active { background: var(--accent); color: #fff; }
-
   .field { display: flex; flex-direction: column; gap: 5px; }
   label { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .15em; color: var(--muted); text-transform: uppercase; }
   input[type="text"] { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 9px 11px; outline: none; transition: border-color .15s; width: 100%; }
-  input[type="text"]:focus { border-color: var(--accent); }
   input[type="text"]::placeholder { color: var(--muted); }
   .field-hint { font-size: 11px; color: var(--muted); font-style: italic; }
-
   .step-indicator { display: flex; gap: 8px; align-items: center; }
   .step-dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--muted); flex-shrink: 0; transition: all .3s; }
-  .step-dot.active { border-color: var(--accent); color: var(--accent); }
-  .step-dot.done   { border-color: var(--accent2); background: var(--accent2); color: #000; }
+  .step-dot.done { border-color: var(--accent2); background: var(--accent2); color: #000; }
   .step-line { flex: 1; height: 1px; background: var(--border); transition: background .3s; }
   .step-line.done { background: var(--accent2); }
-
   .company-result { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 13px; display: none; flex-direction: column; gap: 8px; }
   .company-result.visible { display: flex; }
   .company-name-display { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--accent2); }
   .template-match { font-size: 12px; color: var(--muted); }
   .template-match span { color: var(--text); }
-
   .btn { border: none; border-radius: 3px; padding: 11px 16px; font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; cursor: pointer; transition: all .15s; width: 100%; }
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover { background: #006cbd; }
   .btn-primary:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; }
-  .spinner { display: none; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; margin: 0 auto; }
+  .spinner { display: none; width: 13px; height: 13px; border-radius: 50%; animation: spin .7s linear infinite; margin: 0 auto; }
   .btn-primary.loading .spinner { display: block; }
   .btn-primary.loading .btn-text { display: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
-
   .result-card { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; animation: slideIn .2s ease; }
   .result-card.success { border-color: rgba(56,217,169,.3); }
   .result-card.error   { border-color: rgba(255,107,107,.3); }
@@ -88,48 +88,141 @@
   .result-body { padding: 13px 15px; display: flex; flex-direction: column; gap: 10px; }
   .result-meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .meta-item { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 9px; text-align: center; }
-  .meta-value { font-family: var(--mono); font-size: 17px; font-weight: 600; color: var(--accent); display: block; margin-bottom: 2px; }
+  .meta-value { font-family: var(--mono); font-size: 17px; font-weight: 600; display: block; margin-bottom: 2px; }
   .meta-label { font-size: 10px; color: var(--muted); }
   .result-error { background: rgba(255,107,107,.08); border: 1px solid rgba(255,107,107,.2); border-radius: 3px; padding: 11px; font-family: var(--mono); font-size: 11px; color: var(--danger); word-break: break-word; }
   .download-btn { background: transparent; border: 1px solid var(--accent2); color: var(--accent2); border-radius: 3px; padding: 8px 14px; font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; cursor: pointer; transition: all .15s; text-decoration: none; display: inline-block; }
   .download-btn:hover { background: rgba(56,217,169,.1); }
-
   .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--muted); }
   .empty-icon { font-size: 40px; opacity: .3; }
   .empty-state p { font-family: var(--mono); font-size: 12px; letter-spacing: .1em; }
-
   .log-area { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 10px 12px; font-family: var(--mono); font-size: 11px; color: var(--muted); max-height: 100px; overflow-y: auto; line-height: 1.7; }
-  .log-ok   { color: var(--accent2); }
-  .log-err  { color: var(--danger); }
-  .log-info { color: var(--accent); }
-
+  .log-ok { color: var(--accent2); } .log-err { color: var(--danger); }
   .batch-summary { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 13px 17px; display: flex; align-items: center; gap: 16px; font-family: var(--mono); font-size: 12px; }
-  .ok-count  { color: var(--accent2); }
-  .err-count { color: var(--danger); }
+  .ok-count { color: var(--accent2); } .err-count { color: var(--danger); }
+  .usage-card { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; animation: slideIn .2s ease; }
+  .usage-card h3 { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+  .usage-row { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .usage-row:last-child { border-bottom: none; padding-bottom: 0; }
+  .usage-row span:first-child { color: var(--muted); }
+  .usage-token { font-family: var(--mono); font-size: 10px; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 2px; padding: 2px 6px; }
+
+  :root { --main-accent: #0078d4; }
+  .logo { color: #0078d4; border-color: #0078d4; }
+  .hbadge { background: #0078d422; color: #0078d4; border: 1px solid #0078d444; }
+  .token-modal h2 { color: #0078d4; }
+  .token-btn { background: #0078d4; color: #fff; }
+  .token-btn:hover { opacity: .85; }
+  .token-input-wrap input:focus { border-color: #0078d4; }
+  .model-card:hover { border-color: #0078d4; background: #0078d408; }
+  .model-card.active { border-color: #0078d4; background: #0078d412; }
+  .model-card.active .model-radio { border-color: #0078d4; }
+  .model-card.active .model-radio::after { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: #0078d4; }
+  .model-badge { background: #0078d415; color: #0078d4; border: 1px solid #0078d430; }
+  .tab.active { background: #0078d4; color: #fff; }
+  .step-dot.active { border-color: #0078d4; color: #0078d4; }
+  input[type="text"]:focus { border-color: #0078d4; }
+  .btn-primary { background: #0078d4; color: #fff; }
+  .btn-primary:hover { opacity: .85; }
+  .meta-value { color: #0078d4; }
+  .usage-card h3 { color: #0078d4; }
+  .token-indicator:hover { border-color: #0078d4; color: var(--text); }
+  .spinner { border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; }
+  .token-btn .spinner { border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; }
+
+
+  .modal-tabs { display: flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .modal-tab { flex: 1; padding: 9px; font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; border: none; background: transparent; color: var(--muted); transition: all .15s; }
+  .modal-tab:first-child { border-right: 1px solid var(--border); }
+  .token-spinner { display: none; width: 13px; height: 13px; border-radius: 50%; animation: spin .7s linear infinite; margin: 0 auto; }
+  .token-btn.loading .token-spinner { display: block; }
+  .token-btn.loading .btn-text { display: none; }
+
+  .modal-tab.active { background: #0078d4; color: #fff; }
 </style>
 </head>
 <body>
 
+
+<div class="token-overlay" id="tokenOverlay">
+  <div class="token-modal">
+    <h2 id="modalTitle"> Authentication</h2>
+    <p>Enter an existing token to continue, or generate a new one for your account.</p>
+
+    <!-- Tab switcher -->
+    <div class="modal-tabs">
+      <button class="modal-tab active" id="tabVerify" onclick="switchModalTab('verify')">Use Existing Token</button>
+      <button class="modal-tab"        id="tabGenerate" onclick="switchModalTab('generate')">Generate New Token</button>
+    </div>
+
+    <!-- Verify tab -->
+    <div id="verifyPanel" style="display:flex;flex-direction:column;gap:14px;">
+      <div class="token-input-wrap">
+        <label>Your API Token</label>
+        <input type="text" id="tokenInput" placeholder="po-xxxxxxxxxxxxxxxx" autocomplete="off"/>
+      </div>
+      <div class="token-error" id="tokenError">Invalid token. Please check and try again.</div>
+      <button class="token-btn" id="tokenSubmitBtn" onclick="submitToken()">
+        <div class="token-spinner"></div>
+        <span class="btn-text">Verify & Continue</span>
+      </button>
+    </div>
+
+    <!-- Generate tab -->
+    <div id="generatePanel" style="display:none;flex-direction:column;gap:14px;">
+      <div class="token-input-wrap">
+        <label>Your Name / Label</label>
+        <input type="text" id="generateLabel" placeholder="e.g. nakul, manager"/>
+        <span style="font-size:11px;color:var(--muted);font-style:italic;">Used to identify your usage in the log</span>
+      </div>
+      <div class="token-error" id="generateError">Failed to generate token. Make sure the API is running.</div>
+      <button class="token-btn" id="generateBtn" onclick="generateToken()">
+        <div class="token-spinner"></div>
+        <span class="btn-text">Generate Token</span>
+      </button>
+
+      <!-- Generated token result -->
+      <div id="generatedResult" style="display:none;flex-direction:column;gap:10px;">
+        <div class="token-input-wrap">
+          <label>Your Token (copy and save this)</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="text" id="generatedToken" readonly style="flex:1;"/>
+            <button onclick="copyToken()" style="background:var(--border);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:11px;padding:9px 12px;border-radius:3px;cursor:pointer;white-space:nowrap;" id="copyBtn">Copy</button>
+          </div>
+        </div>
+        <p style="font-size:11px;color:var(--warn);">⚠ Save this token — it cannot be recovered after closing this dialog.</p>
+        <button class="token-btn" onclick="useGeneratedToken()">
+          <span class="btn-text">Use This Token & Continue</span>
+        </button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+
+
 <header>
-  <div class="logo">IDP</div>
+  <div class="logo" id="headerLogo">IDP</div>
   <h1>PO Processor</h1>
-  <span class="azure-badge">Azure</span>
+  <span class="hbadge" id="headerBadge"></span>
+  <div class="token-indicator" onclick="changeToken()" title="Click to change token">
+    <div class="ti-dot"></div>
+    <span id="tokenLabel">Not authenticated</span>
+  </div>
   <span class="status-label" id="statusLabel">Connecting...</span>
   <div class="status-dot" id="statusDot"></div>
 </header>
 
 <main>
   <div class="panel">
-
-    <!-- Model selector -->
     <div>
-      <div class="section-label">Azure Model</div>
+      <div class="section-label">Model</div>
       <div id="modelList" style="display:flex;flex-direction:column;gap:7px;">
         <div style="color:var(--muted);font-family:var(--mono);font-size:12px;">Loading models...</div>
       </div>
     </div>
-
-    <!-- Mode tabs -->
     <div>
       <div class="section-label">Mode</div>
       <div class="tabs">
@@ -137,33 +230,26 @@
         <button class="tab"        id="tabBatch"  onclick="switchMode('batch')">Batch Folder</button>
       </div>
     </div>
-
-    <!-- Single PO -->
     <div id="singleFields" style="display:flex;flex-direction:column;gap:13px;">
-
       <div class="step-indicator">
         <div class="step-dot active" id="step1dot">1</div>
         <div class="step-line" id="stepLine"></div>
         <div class="step-dot" id="step2dot">2</div>
       </div>
-
       <div class="field">
         <label>Customer PO Path</label>
         <input type="text" id="poPath" placeholder="C:/input/PO_001.pdf"/>
         <span class="field-hint">Full path to the customer PO PDF</span>
       </div>
-
       <button class="btn btn-primary" id="detectBtn" onclick="detectCompany()">
         <div class="spinner"></div>
         <span class="btn-text">Step 1 — Detect Company</span>
       </button>
-
       <div class="company-result" id="companyResult">
         <div class="section-label">Detected Company</div>
         <div class="company-name-display" id="companyNameDisplay">—</div>
         <div class="template-match" id="templateMatchDisplay">—</div>
       </div>
-
       <div id="step2Fields" style="display:none;flex-direction:column;gap:13px;">
         <div class="field">
           <label>Customer PO Template Path <span style="font-weight:300;text-transform:none;letter-spacing:0">(optional)</span></label>
@@ -179,8 +265,6 @@
         </button>
       </div>
     </div>
-
-    <!-- Batch -->
     <div id="batchFields" style="display:none;flex-direction:column;gap:13px;">
       <div class="field">
         <label>Customer PO Folder</label>
@@ -197,76 +281,79 @@
       </div>
       <button class="btn btn-primary" id="batchBtn" onclick="runBatch()">
         <div class="spinner"></div>
-        <span class="btn-text">▶ &nbsp;Process All POs</span>
+        <span class="btn-text">▶  Process All POs</span>
       </button>
     </div>
-
     <div class="log-area" id="logArea" style="display:none;"></div>
-
   </div>
-
-  <!-- Results -->
   <div class="results-panel" id="resultsPanel">
     <div class="empty-state" id="emptyState">
-      <div class="empty-icon">◈</div>
+      <div class="empty-icon" id="emptyIcon">⬡</div>
       <p>No results yet</p>
-      <p style="font-size:11px;opacity:.5">Select an Azure model and detect company to start</p>
+      <p style="font-size:11px;opacity:.5">Authenticate and detect company to start</p>
     </div>
   </div>
 </main>
 
 <script>
-const API = 'http://localhost:8001';
-const TOKEN = 'po-VWEhVDTOQCJ5Ys9hgvOkUxACHaFMPmpGzeHjIR8YNPQ'
+const API = 'http://localhost:8000';
+const REPO = 'azure';
+const BADGE = 'Azure';
+const ACCENT_CSS = '#0078d4';
+const ACCENT_VAR = 'var(--main-accent)';
+
+function styleModels() {  }
+function styleStep2()  {  }
+
+
+let TOKEN         = '';
 let selectedModel = null;
 let currentMode   = 'single';
+let sessionStats  = { calls: 0, success: 0, error: 0 };
 
-function authHeaders() {
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${TOKEN}`,
-  };
-}
+
+
+
+
+document.getElementById('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') submitToken(); });
 
 async function init() {
   try {
-    const r = await fetch(`${API}/health`);
+    const r = await fetch(API + '/health');
     if (r.ok) {
       document.getElementById('statusDot').className    = 'status-dot online';
       document.getElementById('statusLabel').textContent = 'API Online';
-      await loadModels();
     } else setOffline();
   } catch { setOffline(); }
+  const saved = localStorage.getItem('po_token_' + REPO);
+  if (saved) { document.getElementById('tokenInput').value = saved; await submitToken(); }
 }
 
 function setOffline() {
   document.getElementById('statusDot').className    = 'status-dot offline';
   document.getElementById('statusLabel').textContent = 'API Offline';
-  document.getElementById('modelList').innerHTML =
-    `<div style="color:var(--danger);font-family:var(--mono);font-size:11px;">Cannot reach API at ${API}<br>Make sure uvicorn is running.</div>`;
+}
+
+function authHeaders() {
+  return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN };
 }
 
 async function loadModels() {
-  const r    = await fetch(`${API}/models`);
+  const r    = await fetch(API + '/models', { headers: authHeaders() });
   const data = await r.json();
+  const models = data.models || data;
   const list = document.getElementById('modelList');
   list.innerHTML = '';
-
-  Object.entries(data.models).forEach(([key, m], i) => {
+  Object.entries(models).forEach(([key, m], i) => {
     const card = document.createElement('div');
     card.className = 'model-card' + (i === 0 ? ' active' : '');
-    card.id        = `model-card-${key}`;
+    card.id        = 'model-card-' + key;
     card.onclick   = () => selectModel(key, card);
-    card.innerHTML = `
-      <div class="model-radio"></div>
-      <div class="model-info">
-        <div class="model-name">${m.display_name}</div>
-        <div class="model-sub">${m.model_name}</div>
-      </div>
-      <span class="model-badge">Azure</span>`;
+    card.innerHTML = '<div class="model-radio"></div><div class="model-info"><div class="model-name">' + m.display_name + '</div><div class="model-sub">' + m.model_name + (m.vision ? ' · vision' : '') + '</div></div><span class="model-badge">' + BADGE + '</span>';
     list.appendChild(card);
     if (i === 0) selectedModel = key;
   });
+  styleModels();
 }
 
 function selectModel(key, card) {
@@ -288,132 +375,79 @@ function clean(val) { return (val || '').trim().replace(/^["']|["']$/g, ''); }
 async function detectCompany() {
   const poPath = clean(document.getElementById('poPath').value);
   if (!poPath) return alert('Enter a Customer PO Path first.');
-
   const btn = document.getElementById('detectBtn');
   btn.classList.add('loading'); btn.disabled = true;
   document.getElementById('emptyState')?.remove();
   log('Detecting company name...', 'info');
-
   try {
-    const r = await fetch(`${API}/detect-company`, {
-  method: 'POST',
-  headers: authHeaders(),
-  body: JSON.stringify({ customer_po_path: poPath, model: selectedModel }),
-});
-
+    const r    = await fetch(API + '/detect-company', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ customer_po_path: poPath, model: selectedModel }) });
     const data = await r.json();
-    if (!r.ok) { log(`Error: ${data.detail}`, 'err'); return; }
-
+    if (!r.ok) { log('Error: ' + data.detail, 'err'); return; }
     document.getElementById('companyResult').classList.add('visible');
     document.getElementById('companyNameDisplay').textContent = data.company_name || 'Unknown';
-
     const tmplEl = document.getElementById('templateMatchDisplay');
-    if (data.template_found) {
-      tmplEl.innerHTML = `Template matched: <span>${data.template_found}</span>`;
-      document.getElementById('templatePath').value = data.template_found;
+    if (data.template_matched) {
+      tmplEl.innerHTML = 'Template matched: <span>' + data.template_name + '</span> (score: ' + data.match_score + ')';
+      document.getElementById('templatePath').value = data.template_path;
     } else {
-      tmplEl.innerHTML = `<span style="color:var(--danger)">No template matched.</span> Add a subfolder named after the company in your templates folder.`;
+      tmplEl.innerHTML = '<span style="color:var(--danger)">No template matched.</span> Available: ' + ((data.all_templates||[]).join(', ') || 'none');
     }
-
     document.getElementById('step2Fields').style.display = 'flex';
     document.getElementById('step1dot').className = 'step-dot done';
     document.getElementById('stepLine').className = 'step-line done';
     document.getElementById('step2dot').className = 'step-dot active';
-    log(`✓ Company: ${data.company_name} | Template: ${data.template_found || 'not found'}`, 'ok');
-  } finally {
-    btn.classList.remove('loading'); btn.disabled = false;
-  }
+    styleStep2();
+    log('✓ Company: ' + data.company_name + ' | Template: ' + (data.template_name || 'not found'), 'ok');
+  } finally { btn.classList.remove('loading'); btn.disabled = false; }
 }
 
 async function processPO() {
   const poPath   = clean(document.getElementById('poPath').value);
   const tmplPath = clean(document.getElementById('templatePath').value);
   const outDir   = clean(document.getElementById('outputDir').value);
-
   const btn = document.getElementById('processBtn');
   btn.classList.add('loading'); btn.disabled = true;
-  log(`Processing with ${selectedModel}...`, 'info');
-
+  log('Processing with ' + selectedModel + '...', 'info');
+  const t0 = Date.now();
   try {
-    const r    = await fetch(`${API}/process`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({
-        customer_po_path:          poPath,
-        customer_po_template_path: tmplPath || null,
-        model:                     selectedModel,
-        output_dir:                outDir   || null,
-      }),
-    });
+    const r    = await fetch(API + '/process-customer-po', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ customer_po_path: poPath, customer_po_template_path: tmplPath || null, model: selectedModel, output_dir: outDir || null }) });
     const data = await r.json();
-    if (!r.ok) renderError(poPath, data.detail);
-    else       renderResult(data);
-  } finally {
-    btn.classList.remove('loading'); btn.disabled = false;
-  }
+    sessionStats.calls++;
+    if (!r.ok) { sessionStats.error++; renderError(poPath, data.detail); }
+    else        { sessionStats.success++; renderResult(data); renderUsageSummary(data, Date.now()-t0); }
+  } finally { btn.classList.remove('loading'); btn.disabled = false; }
 }
 
 async function runBatch() {
-  const body = {
-    po_folder:                 clean(document.getElementById('poFolder').value)      || null,
-    customer_po_template_path: clean(document.getElementById('batchTemplate').value) || null,
-    output_dir:                clean(document.getElementById('batchOutput').value)   || null,
-    model:                     selectedModel,
-  };
-
+  const body = { po_folder: clean(document.getElementById('poFolder').value) || null, customer_po_template_path: clean(document.getElementById('batchTemplate').value) || null, output_dir: clean(document.getElementById('batchOutput').value) || null, model: selectedModel };
   const btn = document.getElementById('batchBtn');
   btn.classList.add('loading'); btn.disabled = true;
   document.getElementById('emptyState')?.remove();
-  log(`Starting batch with ${selectedModel}...`, 'info');
-
+  log('Starting batch with ' + selectedModel + '...', 'info');
   try {
-    const r    = await fetch(`${API}/batch`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify(body),
-    });
+    const r    = await fetch(API + '/batch-customer-po', { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
     const data = await r.json();
     if (!r.ok) { renderError('Batch', data.detail); return; }
-
+    sessionStats.calls += data.total; sessionStats.success += data.succeeded; sessionStats.error += data.failed;
     const panel = document.getElementById('resultsPanel');
     const bar   = document.createElement('div');
     bar.className = 'batch-summary';
-    bar.innerHTML = `<span>Batch complete —</span> <strong>${data.total} files</strong>
-      <span class="ok-count">✓ ${data.succeeded} succeeded</span>
-      ${data.failed ? `<span class="err-count">✗ ${data.failed} failed</span>` : ''}`;
+    bar.innerHTML = '<span>Batch complete —</span> <strong>' + data.total + ' files</strong> <span class="ok-count">✓ ' + data.succeeded + ' succeeded</span>' + (data.failed ? '<span class="err-count">✗ ' + data.failed + ' failed</span>' : '');
     panel.prepend(bar);
-    data.results.forEach(r => {
-      if (r.status === 'success') renderResult(r);
-      else renderError(r.po_file, r.error);
-    });
-    log(`Batch done: ${data.succeeded}/${data.total} succeeded`, data.failed ? 'err' : 'ok');
-  } finally {
-    btn.classList.remove('loading'); btn.disabled = false;
-  }
+    data.results.forEach(r => { if (r.status === 'success') renderResult(r); else renderError(r.po_file, r.error); });
+    log('Batch done: ' + data.succeeded + '/' + data.total + ' succeeded', data.failed ? 'err' : 'ok');
+  } finally { btn.classList.remove('loading'); btn.disabled = false; }
 }
 
 function renderResult(d) {
   const panel    = document.getElementById('resultsPanel');
-  const filename = d.po_file.split(/[\\/]/).pop();
+  const filename = (d.po_file || '').split(/[\\/]/).pop();
   const card     = document.createElement('div');
   card.className = 'result-card success';
-  card.innerHTML = `
-    <div class="result-header">
-      <span class="result-status ok">OK</span>
-      <span class="result-filename">${filename}</span>
-      <span class="result-time">${d.duration_sec}s</span>
-    </div>
-    <div class="result-body">
-      ${d.company_name ? `<div style="font-family:var(--mono);font-size:12px;color:var(--accent2)">⊙ ${d.company_name}</div>` : ''}
-      <div class="result-meta">
-        <div class="meta-item"><span class="meta-value">${d.fields_filled}</span><span class="meta-label">Fields Filled</span></div>
-        <div class="meta-item"><span class="meta-value">${d.line_items}</span><span class="meta-label">Line Items</span></div>
-        <div class="meta-item"><span class="meta-value" style="font-size:10px;color:var(--muted)">${d.model_used}</span><span class="meta-label">Model</span></div>
-      </div>
-      <a class="download-btn" href="${API}/download?path=${encodeURIComponent(d.output_file)}" target="_blank">↓ &nbsp;Download Excel</a>
-    </div>`;
+  card.innerHTML = '<div class="result-header"><span class="result-status ok">OK</span><span class="result-filename">' + filename + '</span><span class="result-time">' + d.duration_sec + 's</span></div><div class="result-body">' + (d.company_name ? '<div style="font-family:var(--mono);font-size:12px;color:var(--accent2)">⊙ ' + d.company_name + '</div>' : '') + '<div class="result-meta"><div class="meta-item"><span class="meta-value" style="color:var(--ACCENT)">' + d.fields_filled + '</span><span class="meta-label">Fields Filled</span></div><div class="meta-item"><span class="meta-value" style="color:var(--ACCENT)">' + d.line_items + '</span><span class="meta-label">Line Items</span></div><div class="meta-item"><span class="meta-value" style="font-size:10px;color:var(--muted)">' + d.model_used + '</span><span class="meta-label">Model</span></div></div><a class="download-btn" href="' + API + '/download?path=' + encodeURIComponent(d.output_file) + '" target="_blank">↓  Download Excel</a></div>';
+  card.innerHTML = card.innerHTML.replaceAll('var(--ACCENT)', ACCENT_VAR);
   panel.prepend(card);
-  log(`✓ ${filename} — ${d.fields_filled} fields, ${d.line_items} line items`, 'ok');
+  log('✓ ' + filename + ' — ' + d.fields_filled + ' fields, ' + d.line_items + ' line items', 'ok');
 }
 
 function renderError(filepath, message) {
@@ -421,27 +455,123 @@ function renderError(filepath, message) {
   const filename = String(filepath).split(/[\\/]/).pop();
   const card     = document.createElement('div');
   card.className = 'result-card error';
-  card.innerHTML = `
-    <div class="result-header">
-      <span class="result-status err">Error</span>
-      <span class="result-filename">${filename}</span>
-    </div>
-    <div class="result-body"><div class="result-error">${message}</div></div>`;
+  card.innerHTML = '<div class="result-header"><span class="result-status err">Error</span><span class="result-filename">' + filename + '</span></div><div class="result-body"><div class="result-error">' + message + '</div></div>';
   panel.prepend(card);
-  log(`✗ ${filename}: ${message}`, 'err');
+  log('✗ ' + filename + ': ' + message, 'err');
 }
 
-function log(msg, type = 'info') {
+function renderUsageSummary(d, elapsedMs) {
+  document.getElementById('usageSummary')?.remove();
+  const panel = document.getElementById('resultsPanel');
+  const card  = document.createElement('div');
+  card.className = 'usage-card'; card.id = 'usageSummary';
+  card.innerHTML = '<h3 style="color:' + ACCENT_CSS + '">⊙ Session Usage</h3><div class="usage-row"><span>Auth Token</span><span class="usage-token">' + TOKEN.slice(0,12) + '...</span></div><div class="usage-row"><span>Timestamp</span><span>' + new Date().toLocaleString() + '</span></div><div class="usage-row"><span>Model Used</span><span>' + d.model_used + '</span></div><div class="usage-row"><span>Processing Time</span><span>' + Math.round(elapsedMs/1000) + 's</span></div><div class="usage-row"><span>Fields Extracted</span><span>' + d.fields_filled + '</span></div><div class="usage-row"><span>Line Items</span><span>' + d.line_items + '</span></div><div class="usage-row"><span>Session Calls</span><span>' + sessionStats.calls + ' total / ' + sessionStats.success + ' success / ' + sessionStats.error + ' errors</span></div><a class="download-btn" style="align-self:flex-start;margin-top:4px" href="' + API + '/download-usage-log" target="_blank">↓  Download Usage Log</a>';
+  panel.prepend(card);
+}
+
+function log(msg, type) {
   const logEl = document.getElementById('logArea');
   logEl.style.display = 'block';
   const line = document.createElement('div');
-  line.className  = `log-${type}`;
-  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  line.className  = 'log-' + (type || 'info');
+  line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
   logEl.appendChild(line);
   logEl.scrollTop = logEl.scrollHeight;
 }
 
 init();
+
+
+function switchModalTab(tab) {
+  document.getElementById('verifyPanel').style.display   = tab === 'verify'   ? 'flex' : 'none';
+  document.getElementById('generatePanel').style.display = tab === 'generate' ? 'flex' : 'none';
+  document.getElementById('tabVerify').classList.toggle('active',   tab === 'verify');
+  document.getElementById('tabGenerate').classList.toggle('active', tab === 'generate');
+  document.getElementById('generatedResult').style.display = 'none';
+  document.getElementById('generateError').classList.remove('visible');
+  document.getElementById('tokenError').classList.remove('visible');
+}
+
+async function generateToken() {
+  const label = document.getElementById('generateLabel').value.trim();
+  if (!label) return alert('Please enter your name or label.');
+
+  const btn = document.getElementById('generateBtn');
+  btn.classList.add('loading'); btn.disabled = true;
+  document.getElementById('generateError').classList.remove('visible');
+
+  try {
+    const r    = await fetch(API + '/generate-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label }),
+    });
+    const data = await r.json();
+
+    if (!r.ok) {
+      document.getElementById('generateError').textContent = data.detail || 'Failed to generate token.';
+      document.getElementById('generateError').classList.add('visible');
+      return;
+    }
+
+    document.getElementById('generatedToken').value       = data.token;
+    document.getElementById('generatedResult').style.display = 'flex';
+
+  } catch {
+    document.getElementById('generateError').textContent = 'Cannot reach API. Make sure uvicorn is running.';
+    document.getElementById('generateError').classList.add('visible');
+  } finally {
+    btn.classList.remove('loading'); btn.disabled = false;
+  }
+}
+
+function copyToken() {
+  const input = document.getElementById('generatedToken');
+  input.select();
+  document.execCommand('copy');
+  document.getElementById('copyBtn').textContent = 'Copied!';
+  setTimeout(() => document.getElementById('copyBtn').textContent = 'Copy', 2000);
+}
+
+function useGeneratedToken() {
+  const token = document.getElementById('generatedToken').value;
+  document.getElementById('tokenInput').value = token;
+  switchModalTab('verify');
+  submitToken();
+}
+
+async function submitToken() {
+  const input = document.getElementById('tokenInput').value.trim();
+  if (!input) return;
+  const btn = document.getElementById('tokenSubmitBtn');
+  btn.classList.add('loading'); btn.disabled = true;
+  document.getElementById('tokenError').classList.remove('visible');
+  try {
+    const r = await fetch(API + '/models', { headers: { 'Authorization': 'Bearer ' + input } });
+    if (r.ok) {
+      TOKEN = input;
+      localStorage.setItem('po_token_' + REPO, input);
+      document.getElementById('tokenOverlay').classList.add('hidden');
+      document.getElementById('tokenLabel').textContent = 'Token: ' + input.slice(0,8) + '...';
+      await loadModels();
+    } else {
+      document.getElementById('tokenError').classList.add('visible');
+    }
+  } catch {
+    document.getElementById('tokenError').textContent = 'Cannot reach API. Make sure uvicorn is running.';
+    document.getElementById('tokenError').classList.add('visible');
+  } finally { btn.classList.remove('loading'); btn.disabled = false; }
+}
+
+function changeToken() {
+  TOKEN = '';
+  localStorage.removeItem('po_token_' + REPO);
+  document.getElementById('tokenInput').value = '';
+  document.getElementById('generatedResult').style.display = 'none';
+  switchModalTab('verify');
+  document.getElementById('tokenOverlay').classList.remove('hidden');
+}
+
 </script>
 </body>
 </html>

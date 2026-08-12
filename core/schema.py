@@ -75,18 +75,23 @@ def build_prompt(positions: dict) -> str:
         lines.append(f"- {key}: {label}")
 
     lines += [
-        "",
-        "LINE ITEMS TABLE — IMPORTANT GROUPING RULES:",
-        "Each physical product entry may span multiple printed lines — combine into ONE line_item:",
-        "  - Skip rows that are only a PO reference/section label — these are NOT products.",
-        "  - The PART NUMBER / ITEM ID row contains the code, quantity, unit price, total price.",
-        "  - The DESCRIPTION row immediately below contains the full product description.",
-        "  - Combine both into ONE line_item. Do NOT create separate entries for reference rows,",
-        "    description-only rows, or blank rows.",
-        "  - Include a confidence score (0.0–1.0) for each combined row.",
-        "",
-        "For each product row extract:",
-    ]
+    "",
+    "LINE ITEMS — extract EVERY product row with ALL sub-lines:",
+    "  - Each product has 2-3 lines:",
+    "    Line 1: Item code (e.g. '15SH10K6') — goes in item field",
+    "    Line 2: Description (e.g. 'CENT. PUMP 3500RPM') — goes in description field",
+    "    Line 3: Pricing detail (e.g. '$ 1,923 x 0.54 (F)') — goes in pricing_detail field",
+    "  - The '$ X x Y (Z)' line shows: list price x multiplier (tax code)",
+    "  - Include this pricing detail line — do NOT skip it",
+    "  - For Item ID Item Description field: combine the item code AND its full description",
+    "    e.g. '10K55 Shaft Seal Car/Sil Car/Vi' (item code first, then description)",
+    "  - If description appears twice (repeated line), include it only once",
+    "  - Part No. is explicitly labelled 'Part No.:' in the document — extract that value",
+    "  - Skip ONLY: 'HST On Purchase' tax summary rows and blank rows",
+    "  - 'MISC. GOODS...' in Item column means miscellaneous — keep as-is",
+    "",
+    "For each product row extract:",
+]
     for key, label, _ in positions["li_fields"]:
         if key != "confidence":
             lines.append(f"    * {key}: {label}")
