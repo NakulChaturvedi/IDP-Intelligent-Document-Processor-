@@ -1,58 +1,62 @@
-# ── PO Processor — Azure Configuration ────────────────────────────────────────
-
 folders:
-  po_input:   "C:/po_processor/input"
-  templates:  "C:/Users/nakul/Downloads/po-templates"   # subfolders named after companies
-  output:     "C:/po_processor/output"
-
+  output: C:/po_processor/output
+  po_input: C:/po_processor/input
+  templates: C:/Users/nakul/Downloads/po-templates
+models:
+  cohere_azure:
+    api_key: 9d3sc9IC1lyeRpm8E508cupcZVIOp169TAQw85cRs5KROMhWSSO7JQQJ99CEACfhMk5XJ3w3AAAAACOGK0hx
+    display_name: Cohere Command R+ (Azure)
+    endpoint: https://idp-azure-repo-resource.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview
+    model_name: cohere-command-a
+    provider: cohere_azure
+    retries: 3
+    timeout: 120
+  gpt5.4-2__azure:
+    api_key: 9d3sc9IC1lyeRpm8E508cupcZVIOp169TAQw85cRs5KROMhWSSO7JQQJ99CEACfhMk5XJ3w3AAAAACOGK0hx
+    display_name: gpt5.4-2(Azure)
+    endpoint: https://idp-azure-repo-resource.services.ai.azure.com/openai/v1/responses
+    model_name: gpt-5.4
+    provider: openai_azure_responses
+    retries: 3
+    timeout: 120
+  mistral_azure:
+    api_key: 4e6zHtAGe6xWW4H46aAkoezXCJB21YWAVSzhZ7WfwVAPtsHHTQkgJQQJ99CCACHYHv6XJ3w3AAAAACOGNQ9G
+    display_name: Mistral Document AI (Azure)
+    endpoint: https://idp--trial-resource.services.ai.azure.com/providers/mistral/azure/ocr
+    model_name: mistral-document-ai-2512
+    provider: mistral_azure
+    retries: 3
+    timeout: 300
+security:
+  enabled: true
+  tokens:
+    09d4d8f4d490c74975e67075c3d4a4e33fd49b038cdd37ab6eb87f59490d15ca: nakul3
+    364ecb993b7de7e25b2df125263993526da904c461f18a9418b7ea8ab8c72713: nakul
+    69a4f28864f84e970e152972cd1f1966190d80c6b8491471fb991b9d99a1c1d4: nakul3
+    93e4c31549c9016abba95d138cd8c4abb488bdd21c7f82c6014a7fa5349aec54: nakul5
+    98160c708a1bf7c2e0a74eb586a5b8704f289a8a36f74da79879d4e77fb97579: nakul4
+    YOUR_MANAGER_TOKEN_HASH_HERE: manager
+    bb3f9bc5d594da9fe89c2cef300caee4a38b47007525293f848307651baac82e: nakul4
+  usage_log: C:/Users/nakul/Downloads/po_usage_log.xlsx
+template:
+  line_items_anchor: Quantity
+  sheet_name: PO Summary
+  skip_labels:
+  - PURCHASE ORDER — EXTRACTED DATA
+  - PURCHASE ORDER - EXTRACTED DATA
+  - LINE ITEMS
+  - Field
+  - Value
+  - Confidence
+  - Confidence color guide
+  skip_prefixes:
+  - Confidence color guide
+  - Green =
+  - Yellow =
+  - Red =
 security:
   enabled: true
   usage_log: "C:/Users/nakul/Downloads/po_usage_log.xlsx"
+  encryption_key: "hVdD5zoTPzq6nMd52jZ0FdNtF5D003Z0YTI-T0jmOhw="  # generate once, never change
   tokens:
-    "364ecb993b7de7e25b2df125263993526da904c461f18a9418b7ea8ab8c72713": "nakul"
-    "YOUR_MANAGER_TOKEN_HASH_HERE": "manager"
-
-template:
-  sheet_name:        "PO Summary"
-  line_items_anchor: "Quantity"
-  skip_labels:
-    - "PURCHASE ORDER — EXTRACTED DATA"
-    - "PURCHASE ORDER - EXTRACTED DATA"
-    - "LINE ITEMS"
-    - "Field"
-    - "Value"
-    - "Confidence"
-    - "Confidence color guide"
-  skip_prefixes:
-    - "Confidence color guide"
-    - "Green ="
-    - "Yellow ="
-    - "Red ="
-
-models:
-  mistral_azure:
-    provider:     mistral_azure
-    display_name: "Mistral Document AI (Azure)"
-    endpoint:     "https://idp--trial-resource.services.ai.azure.com/providers/mistral/azure/ocr"
-    api_key:      "4e6zHtAGe6xWW4H46aAkoezXCJB21YWAVSzhZ7WfwVAPtsHHTQkgJQQJ99CCACHYHv6XJ3w3AAAAACOGNQ9G"
-    model_name:   "mistral-document-ai-2512"
-    timeout:      300
-    retries:      3
-
-  cohere_azure:
-    provider:     cohere_azure
-    display_name: "Cohere Command R+ (Azure)"
-    endpoint:     "https://idp-azure-repo-resource.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
-    api_key:      "9d3sc9IC1lyeRpm8E508cupcZVIOp169TAQw85cRs5KROMhWSSO7JQQJ99CEACfhMk5XJ3w3AAAAACOGK0hx"
-    model_name:   "cohere-command-a"
-    timeout:      120
-    retries:      3
-
-  llama_azure:
-    provider:     llama_azure
-    display_name: "Llama-4-17B(Azure)"
-    endpoint:     "https://idp-azure-repo-resource.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
-    api_key:      "9d3sc9IC1lyeRpm8E508cupcZVIOp169TAQw85cRs5KROMhWSSO7JQQJ99CEACfhMk5XJ3w3AAAAACOGK0hx"
-    model_name:   "Llama-4-Scout-17B-16E-Instruct"
-    timeout:      120
-    retries:      3
+    "hash...": "nakul"
