@@ -22,6 +22,7 @@ from core.filler    import fill_template
 from core.template  import find_template_by_company, find_template_by_po, scan_template
 from core.security  import generate_token, log_usage, verify_token, USAGE_LOG
 
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -124,12 +125,33 @@ def _process_single(
 ) -> POResult:
     t0 = time.time()
 
+    # ── Handle SharePoint or HTTP URLs for PO ─────────────────────────────────
+    print(f"  [debug] customer_po_path = {customer_po_path!r}")
+    print(f"  [debug] starts with http = {customer_po_path.startswith('http')}")
+    if customer_po_path.startswith("http"):
+        from core.extractor import download_from_sharepoint
+        customer_po_path = download_from_sharepoint(
+            customer_po_path,
+            output_dir=str(Path(CFG["folders"]["output"]))
+        )
+
+    # ── Handle SharePoint or HTTP URLs for template ───────────────────────────
+    if customer_po_template_path and customer_po_template_path.startswith("http"):
+        from core.extractor import download_from_sharepoint
+        tmpl_dir = Path(CFG["folders"]["templates"])
+        tmpl_dir.mkdir(parents=True, exist_ok=True)
+        customer_po_template_path = download_from_sharepoint(
+            customer_po_template_path,
+            output_dir=str(tmpl_dir)
+        )
+
     po_file = Path(customer_po_path.strip('"').strip("'"))
     if not po_file.is_absolute():
         po_file = Path(CFG["folders"]["po_input"]) / customer_po_path
     if not po_file.exists():
         raise HTTPException(status_code=404, detail=f"PO file not found: {po_file}")
-
+    
+    # ... rest of function unchanged
     out_dir = Path(output_dir or CFG["folders"]["output"])
     out_dir.mkdir(parents=True, exist_ok=True)
     output_path = str(out_dir / f"{po_file.stem}_extracted.xlsx")
@@ -231,6 +253,13 @@ def generate_token_endpoint(body: GenerateTokenRequest):
     token = generate_token(body.label.strip())
     return {"token": token, "label": body.label.strip()}
 
+@app.post("/auth/generate-token")
+def create_token(label: str):
+    token = generate_token(label)
+    return {
+        "token": token,
+        "label": label
+    }
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
@@ -255,6 +284,19 @@ def list_models(auth: dict = Depends(verify_token)):
 def detect_company(req: DetectCompanyRequest, auth: dict = Depends(verify_token)):
     t0      = time.time()
     po_path = req.customer_po_path.strip('"').strip("'")
+
+    po_path = req.customer_po_path.strip('"').strip("'").strip()
+
+    if po_path.startswith("http"):
+        from core.extractor import download_from_sharepoint
+        try:
+            po_path = download_from_sharepoint(
+                po_path,
+                output_dir=str(Path(CFG["folders"]["output"]))
+            )
+            print(f"  [detect-company] downloaded to: {po_path}")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to download from SharePoint: {e}")
 
     if not Path(po_path).exists():
         raise HTTPException(status_code=404, detail=f"PO file not found: {po_path}")

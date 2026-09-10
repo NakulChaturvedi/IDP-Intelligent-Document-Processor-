@@ -102,6 +102,32 @@ def _normalize_response(data: dict, positions: dict, estimate_confidence: bool =
             normalized[key] = {"value": val, "confidence": conf}
 
     normalized["line_items"] = data.get("line_items", [])
+
+    # If the same value is explicitly extracted for multiple header fields,
+    # treat the duplicate occurrence as high-confidence as well.
+    header_values = {}
+
+    for field, result in normalized.items():
+        if field == "line_items":
+            continue
+
+        if isinstance(result, dict):
+            value = result.get("value")
+
+            if value is not None and str(value).strip():
+                normalized_value = re.sub(r"[^a-zA-Z0-9]", "", str(value)).lower()
+
+                if normalized_value:
+                    header_values.setdefault(normalized_value, []).append(field)
+
+    # Duplicate values across different header fields are valid.
+    # Example: Supplier Phone == Ship To Phone.
+    for normalized_value, fields in header_values.items():
+        if len(fields) > 1:
+            for field in fields:
+                if isinstance(normalized[field], dict):
+                    normalized[field]["confidence"] = 1.0
+
     return normalized
 
 
@@ -114,6 +140,154 @@ def _estimate_confidence(val) -> float | None:
     if len(s) < 2:
         return 0.4
     return 0.85
+
+
+def _is_missing_header_value(value) -> bool:
+    """Return True when an extracted header value is effectively empty."""
+    if value is None:
+        return True
+    text = str(value).strip().lower()
+    return not text or text in {"null", "none", "n/a", "na", "-", "—"}
+
+
+def _value_search_text(value: Any) -> str:
+    """Normalize a value for duplicate-value matching in OCR/PDF text."""
+    return re.sub(r"\s+", " ", str(value or "")).strip().lower()
+
+
+def _duplicate_value_present_in_document(value: Any, document_text: str) -> bool:
+    """
+    Check whether a non-empty extracted value occurs at least twice in the
+    document. Two occurrences are important: one can belong to the source
+    field and the second can be the duplicated value for the missing field.
+    """
+    if _is_missing_header_value(value):
+        return False
+
+    value_text = _value_search_text(value)
+    document_text = _value_search_text(document_text)
+    if not value_text or not document_text:
+        return False
+
+    # Exact text match first (preserves formatted values such as 877-624-5757).
+    if document_text.count(value_text) >= 2:
+        return True
+
+    # Phone numbers are often formatted differently by OCR, e.g.
+    # 877-624-5757 vs 8776245757. Match their digits instead.
+    digits = re.sub(r"\D", "", value_text)
+    if len(digits) >= 7:
+        digit_text = re.sub(r"\D", "", document_text)
+        return digit_text.count(digits) >= 2
+
+    return False
+
+
+def _field_family(key: str, label: str) -> str:
+    """
+    Classify header fields so a duplicated value is only copied between
+    semantically compatible fields. Line items are deliberately excluded.
+    """
+    text = f"{key} {label}".lower()
+    if re.search(r"\b(phone|telephone|tel)\b", text):
+        return "phone"
+    if re.search(r"\bfax\b", text):
+        return "fax"
+    if re.search(r"\b(email|e-mail)\b", text):
+        return "email"
+    if re.search(r"\b(address|addr)\b", text):
+        return "address"
+    if re.search(r"\b(date|day)\b", text):
+        return "date"
+    if re.search(r"\b(id|identifier|number|no\.?|#)\b", text):
+        return "id_or_number"
+    if re.search(r"\bcurrency\b", text):
+        return "currency"
+    if re.search(r"\b(terms|payment)\b", text):
+        return "terms"
+    return "other"
+
+
+def _apply_duplicate_header_fallback(
+    result: dict,
+    pdf_path: str,
+    positions: dict = None,
+) -> dict:
+    """
+    Fill missing HEADER fields when the same explicitly extracted value
+    appears more than once in the source document.
+
+    This is intentionally a post-processing safeguard rather than another
+    prompt instruction. It does NOT inspect or modify ``line_items``.
+
+    Example:
+        Supplier Phone = 8776245757
+        Ship To Phone = null
+
+    If 8776245757 occurs twice in the PDF, Ship To Phone is populated with
+    the same value and a high confidence score.
+
+    Values are only copied between compatible field families (phone->phone,
+    date->date, address->address, etc.) to avoid blindly copying unrelated
+    duplicate numbers.
+    """
+    if not isinstance(result, dict) or not positions:
+        return result
+
+    try:
+        document_text = _extract_pdf_text(pdf_path)
+    except Exception as exc:
+        print(f"  [duplicate-header-fallback] Could not read PDF text: {exc}")
+        return result
+
+    header_fields = positions.get("header_fields", [])
+    if not header_fields or not document_text:
+        return result
+
+    # Collect existing non-empty header values.
+    existing = []
+    for key, label, *_ in header_fields:
+        field = result.get(key)
+        value = field.get("value") if isinstance(field, dict) else field
+        if _is_missing_header_value(value):
+            continue
+        existing.append((key, label, value, _field_family(key, label)))
+
+    changes = []
+
+    for target_key, target_label, *_ in header_fields:
+        target = result.get(target_key)
+        target_value = target.get("value") if isinstance(target, dict) else target
+
+        # Never overwrite a value that the model already extracted.
+        if not _is_missing_header_value(target_value):
+            continue
+
+        target_family = _field_family(target_key, target_label)
+        candidates = []
+
+        for source_key, source_label, source_value, source_family in existing:
+            if source_key == target_key or source_family != target_family:
+                continue
+            if _duplicate_value_present_in_document(source_value, document_text):
+                candidates.append((source_key, source_label, source_value))
+
+        # Only fill when exactly one compatible duplicate candidate exists.
+        # This avoids making a guess when multiple different values are present.
+        if len(candidates) == 1:
+            source_key, source_label, source_value = candidates[0]
+            result[target_key] = {
+                "value": source_value,
+                "confidence": 1.0,
+            }
+            changes.append(
+                f"{target_key} <- {source_key} ({source_value!r})"
+            )
+
+    if changes:
+        print("  [duplicate-header-fallback] Filled: " + ", ".join(changes))
+
+    return result
 
 
 def _extract_pdf_text(pdf_path: str) -> str:
@@ -154,11 +328,30 @@ def _build_schema_instruction(positions: dict) -> str:
         "  ]\n"
         "}\n\n"
         "Confidence scoring rules:\n"
-        "  1.0 = clearly and explicitly stated\n"
-        "  0.7 = present but partially ambiguous\n"
-        "  0.4 = inferred or uncertain\n"
-        "  0.0 = not found (set value to null)\n"
-        "Use null for any field value not found."
+        "  1.0 = the value is clearly present anywhere in the document and can be confidently assigned to the requested field.\n"
+        "  0.7 = the value is present but its association with the requested field is somewhat ambiguous.\n"
+        "  0.4 = the value is only inferred or uncertain.\n"
+        "  0.0 = the value cannot be found anywhere in the document; in this case set the value to null.\n"
+        "IMPORTANT: If a requested field has an exact matching value elsewhere in the document and the value is clearly applicable to that field, assign confidence 1.0 even if the value is duplicated under another field.\n"
+        "IMPORTANT: Duplicate values across fields must NOT reduce confidence. If Supplier Phone and Ship To Phone contain the same phone number, and the number is clearly applicable to both fields, both fields must have confidence 1.0.\n"
+        "COLUMN SEPARATION RULES:\n"
+        "  - The terms table has 4 columns: Terms | Expected Date | Ship Via | FOB\n"
+        "  - Extract each column value independently — never merge adjacent column values\n"
+        "  - FOB contains only the delivery point (e.g. 'Your Shop') — not the shipping method\n"
+        "  - Ship Via contains only the shipping method (e.g. 'best way') — not FOB\n"
+        "  - Ship Via may contain multiple words including 'pp & c' — this is valid and complete\n"
+        "  - Do not penalise confidence for Ship Via containing 'pp & c' — it is part of the shipping method\n"
+        "IMPORTANT — FIELD EXTRACTION RULES:\n"
+        "  1. Treat every header field as an independent field.\n"
+        "  2. Search the entire purchase order for each requested field before deciding it is missing.\n"
+        "  3. If the same value appears multiple times and is explicitly associated with multiple fields, extract it into EVERY applicable field.\n"
+        "  4. Never leave a field null simply because the same value was already extracted for another field.\n"
+        "  5. Do not deduplicate values across different fields. Duplicate values are valid and expected.\n"
+        "  6. For example, if Supplier Phone and Ship To Phone contain the same phone number, populate BOTH fields with that phone number.\n"
+        "  7. The same rule applies to repeated addresses, dates, IDs, currencies, names, or other values when they are explicitly associated with different fields.\n"
+        "  8. Use null ONLY when the requested field cannot be found anywhere in the document.\n"
+        "DUPLICATE FIELD EXAMPLE:\n"
+        "If Supplier Phone is 877-624-5757 and Ship To Phone is also 877-624-5757, return 877-624-5757 for BOTH fields. Do not set Ship To Phone to null because the value is duplicated."
     )
 
 
@@ -284,7 +477,8 @@ def _extract_mistral_azure(pdf_path: str, model_cfg: dict, prompt: str, position
 
         if ann:
             result = json.loads(ann) if isinstance(ann, str) else ann
-            return _normalize_response(result, positions, estimate_confidence=False)
+            result = _normalize_response(result, positions, estimate_confidence=False)
+            return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
         # Annotation empty — extract OCR text from pages for fallback
         print("  [mistral_azure] No document_annotation in response — falling back to OCR text + chat")
@@ -339,7 +533,8 @@ def _extract_mistral_azure(pdf_path: str, model_cfg: dict, prompt: str, position
     data    = json.loads(raw)
     content = data["choices"][0]["message"]["content"]
     result  = _parse_json(content)
-    return _normalize_response(result, positions, estimate_confidence=False)
+    result = _normalize_response(result, positions, estimate_confidence=False)
+    return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
 
 def _build_mistral_schema(positions: dict) -> dict:
@@ -430,7 +625,8 @@ def _extract_openai_azure(pdf_path: str, model_cfg: dict, prompt: str, positions
     data    = json.loads(raw)
     content = data["choices"][0]["message"]["content"]
     result  = _parse_json(content)
-    return _normalize_response(result, positions, estimate_confidence=False)
+    result = _normalize_response(result, positions, estimate_confidence=False)
+    return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
 
 # ── Phi Azure — Azure AI chat completions ─────────────────────────────────────
@@ -478,7 +674,8 @@ def _extract_phi_azure(pdf_path: str, model_cfg: dict, prompt: str, positions: d
     data    = json.loads(raw)
     content = data["choices"][0]["message"]["content"]
     result  = _parse_json(content)
-    return _normalize_response(result, positions, estimate_confidence=False)
+    result = _normalize_response(result, positions, estimate_confidence=False)
+    return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
 
 # ── Llama Azure — Azure AI chat completions ───────────────────────────────────
@@ -503,6 +700,7 @@ def _extract_llama_azure(pdf_path: str, model_cfg: dict, prompt: str, positions:
         f"{prompt}\n\n{schema_instruction}\n\n"
         "CRITICAL — LINE ITEMS:\n"
         "You MUST extract every single product row from the table.\n"
+        "Even if 'Supplier Phone' and 'Ship To Phone' is same, extract both.\n"
         "Count the rows in the table and make sure your line_items array has the same count.\n"
         f"Each line item must have these fields:\n{li_list}\n\n"
         "Return ONLY valid JSON — no explanation, no markdown.\n\n"
@@ -535,7 +733,8 @@ def _extract_llama_azure(pdf_path: str, model_cfg: dict, prompt: str, positions:
     data    = json.loads(raw)
     content = data["choices"][0]["message"]["content"]
     result  = _parse_json(content)
-    return _normalize_response(result, positions, estimate_confidence=True)
+    result = _normalize_response(result, positions, estimate_confidence=True)
+    return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
 # ── OpenAI Azure — Responses API (/v1/responses endpoint) ────────────────────
 
@@ -583,8 +782,69 @@ def _extract_openai_azure_responses(pdf_path: str, model_cfg: dict, prompt: str,
         raise RuntimeError(f"Unexpected Responses API response structure: {raw[:300]}")
 
     result = _parse_json(content)
-    return _normalize_response(result, positions, estimate_confidence=False)
+    result = _normalize_response(result, positions, estimate_confidence=False)
+    return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
+def download_from_sharepoint(url: str, output_dir: str = None) -> str:
+    import tempfile, re, time, urllib.parse
+    import requests as req
+
+    download_url = url + ("&download=1" if "?" in url else "?download=1")
+
+    # Ensure output dir exists
+    if output_dir:
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+    out_dir = output_dir or tempfile.gettempdir()
+
+    print(f"  Downloading from SharePoint: {url[:50]}...")
+    r = req.get(download_url, timeout=60)
+    if r.status_code != 200:
+        raise RuntimeError(f"Failed to download from SharePoint [{r.status_code}]")
+
+    content_type = r.headers.get("Content-Type", "")
+    print(f"  [sharepoint] Content-Type: {content_type!r}")
+
+    # ── Step 1: Try Content-Disposition header ────────────────────────────────
+    cd    = r.headers.get("Content-Disposition", "")
+    match = re.search(r'filename\*?=["\']?(?:UTF-8\'\')?([^"\';\r\n]+)', cd, re.IGNORECASE)
+    filename = match.group(1).strip() if match else ""
+
+    # ── Step 2: Try extracting filename from URL path ─────────────────────────
+    if not filename or filename in ("download", ""):
+        parsed     = urllib.parse.urlparse(url)
+        path_parts = parsed.path.split("/")
+        for part in reversed(path_parts):
+            decoded = urllib.parse.unquote(part)
+            if decoded.endswith((".xlsx", ".pdf", ".xlsm")):
+                filename = decoded
+                break
+
+    # ── Step 3: Final fallback — use content type ─────────────────────────────
+    if not filename or filename in ("download", ""):
+        if "spreadsheet" in content_type or "excel" in content_type:
+            ext = ".xlsx"
+        elif "pdf" in content_type:
+            ext = ".pdf"
+        else:
+            ext = ".xlsx" if ":x:" in url else ".pdf"
+        filename = f"sp_download_{int(time.time())}{ext}"
+
+    # ── Step 4: Force correct extension based on Content-Type ─────────────────
+    if "spreadsheet" in content_type or "excel" in content_type:
+        if not filename.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
+            filename = Path(filename).stem + ".xlsx"
+
+    # ── Step 5: Force .xlsx if saving to templates folder ────────────────────
+    if output_dir and "template" in output_dir.lower():
+        if not filename.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
+            filename = Path(filename).stem + ".xlsx"
+
+    save_path = str(Path(out_dir) / filename)
+    with open(save_path, "wb") as f:
+        f.write(r.content)
+
+    print(f"  [sharepoint] Saved as: {save_path}")
+    return save_path
 # ── Provider registry ──────────────────────────────────────────────────────────
 
 def _extract_cohere_azure(pdf_path: str, model_cfg: dict, prompt: str, positions: dict = None) -> dict:

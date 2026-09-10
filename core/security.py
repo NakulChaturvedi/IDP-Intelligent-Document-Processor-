@@ -39,14 +39,25 @@ _bearer = HTTPBearer(auto_error=False)
 def _load_token_store() -> dict:
     if not TOKENS_FILE.exists():
         return {}
+
     try:
-        return json.loads(TOKENS_FILE.read_text())
-    except Exception:
+        return json.loads(TOKENS_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[security] Failed to read tokens.json: {e}")
         return {}
 
 
 def _save_token_store(store: dict) -> None:
-    TOKENS_FILE.write_text(json.dumps(store, indent=2))
+    try:
+        TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TOKENS_FILE.write_text(
+            json.dumps(store, indent=2),
+            encoding="utf-8"
+        )
+        print(f"[security] Tokens saved to: {TOKENS_FILE}")
+    except Exception as e:
+        print(f"[security] FAILED to save tokens.json: {e}")
+        raise
 
 
 def _hash(token: str) -> str:

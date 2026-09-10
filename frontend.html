@@ -296,7 +296,7 @@
 </main>
 
 <script>
-const API = 'http://localhost:8000';
+const API = 'http://127.0.0.1:8000';
 const REPO = 'azure';
 const BADGE = 'Azure';
 const ACCENT_CSS = '#0078d4';
@@ -317,18 +317,32 @@ let sessionStats  = { calls: 0, success: 0, error: 0 };
 
 document.getElementById('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') submitToken(); });
 
-async function init() {
-  try {
-    const r = await fetch(API + '/health');
-    if (r.ok) {
-      document.getElementById('statusDot').className    = 'status-dot online';
-      document.getElementById('statusLabel').textContent = 'API Online';
-    } else setOffline();
-  } catch { setOffline(); }
-  const saved = localStorage.getItem('po_token_' + REPO);
-  if (saved) { document.getElementById('tokenInput').value = saved; await submitToken(); }
-}
+async function generateToken() {
+    console.log("Generate clicked");
 
+    try {
+        console.log("Sending request...");
+
+        const r = await fetch(API + '/generate-token', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                label: document.getElementById('generateLabel').value
+            })
+        });
+
+        console.log("Response:", r.status);
+
+        const data = await r.json();
+
+        console.log(data);
+
+    } catch (e) {
+        console.error(e);
+    }
+}
 function setOffline() {
   document.getElementById('statusDot').className    = 'status-dot offline';
   document.getElementById('statusLabel').textContent = 'API Offline';
@@ -479,6 +493,29 @@ function log(msg, type) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+async function init() {
+  // Pre-warm tunnel connection to bypass devtunnel interstitial cookie
+  try {
+    await fetch(API + '/health', { mode: 'no-cors' });
+  } catch {}
+
+  // Health check
+  try {
+    const r = await fetch(API + '/health');
+    if (r.ok) {
+      document.getElementById('statusDot').className    = 'status-dot online';
+      document.getElementById('statusLabel').textContent = 'API Online';
+    } else setOffline();
+  } catch { setOffline(); }
+
+  // Auto-login if token saved in localStorage
+  const saved = localStorage.getItem('po_token_' + REPO);
+  if (saved) {
+    document.getElementById('tokenInput').value = saved;
+    await submitToken();
+  }
+}
+
 init();
 
 
@@ -487,14 +524,25 @@ function switchModalTab(tab) {
   document.getElementById('generatePanel').style.display = tab === 'generate' ? 'flex' : 'none';
   document.getElementById('tabVerify').classList.toggle('active',   tab === 'verify');
   document.getElementById('tabGenerate').classList.toggle('active', tab === 'generate');
+
+  // Reset both panels when switching
   document.getElementById('generatedResult').style.display = 'none';
+  document.getElementById('generatedToken').value = '';
+  document.getElementById('copyBtn').textContent = 'Copy';
   document.getElementById('generateError').classList.remove('visible');
   document.getElementById('tokenError').classList.remove('visible');
+  document.getElementById('generateLabel').value = '';  // ← clear name field too
 }
 
 async function generateToken() {
   const label = document.getElementById('generateLabel').value.trim();
   if (!label) return alert('Please enter your name or label.');
+
+  // Reset previous result before generating new one
+  document.getElementById('generatedResult').style.display = 'none';
+  document.getElementById('generatedToken').value = '';
+  document.getElementById('copyBtn').textContent = 'Copy';
+  document.getElementById('generateError').classList.remove('visible');
 
   const btn = document.getElementById('generateBtn');
   btn.classList.add('loading'); btn.disabled = true;
@@ -543,6 +591,9 @@ function useGeneratedToken() {
 async function submitToken() {
   const input = document.getElementById('tokenInput').value.trim();
   if (!input) return;
+    // Pre-warm tunnel to bypass devtunnel interstitial
+  try { await fetch(API + '/health', { mode: 'no-cors' }); } catch {}
+  await new Promise(r => setTimeout(r, 500)); // small delay
   const btn = document.getElementById('tokenSubmitBtn');
   btn.classList.add('loading'); btn.disabled = true;
   document.getElementById('tokenError').classList.remove('visible');
