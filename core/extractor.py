@@ -127,9 +127,23 @@ def _normalize_response(data: dict, positions: dict, estimate_confidence: bool =
             for field in fields:
                 if isinstance(normalized[field], dict):
                     normalized[field]["confidence"] = 1.0
+    for key, label, *_ in positions["header_fields"]:
+        val = (
+            flat.get(key)
+            or response_loose.get(_loose(key))
+            or response_loose.get(_loose(label))
+        )
+        if isinstance(val, dict) and "value" in val:
+            normalized[key] = val
+            # ── Fix: null value with 0% → change to 100% ──────────────────
+            if normalized[key].get("value") is None and normalized[key].get("confidence") == 0.0:
+                normalized[key]["confidence"] = 1.0
+        else:
+            conf = _estimate_confidence(val) if estimate_confidence else None
+            normalized[key] = {"value": val, "confidence": conf}
 
-    return normalized
-
+    normalized["line_items"] = data.get("line_items", [])
+    return normalized   
 
 def _estimate_confidence(val) -> float | None:
     if val is None:
@@ -328,10 +342,18 @@ def _build_schema_instruction(positions: dict) -> str:
         "  ]\n"
         "}\n\n"
         "Confidence scoring rules:\n"
-        "  1.0 = the value is clearly present anywhere in the document and can be confidently assigned to the requested field.\n"
-        "  0.7 = the value is present but its association with the requested field is somewhat ambiguous.\n"
-        "  0.4 = the value is only inferred or uncertain.\n"
-        "  0.0 = the value cannot be found anywhere in the document; in this case set the value to null.\n"
+        "  1.0 = value clearly and explicitly stated in the document\n"
+        "  1.0 = field is genuinely absent from this PO type (set value to null, confidence 1.0)\n"
+        "  0.7 = value is present but partially ambiguous or unclear\n"
+        "  0.4 = value is inferred or uncertain\n"
+        "  0.0 = field should exist in this PO but could not be read or was illegible\n"
+        "\n"
+        "IMPORTANT CONFIDENCE RULE:\n"
+        "  If a field is simply not present anywhere in the document — not mentioned, not labelled,\n"
+        "  not implied — set value to null AND confidence to 1.0.\n"
+        "  Only use 0.0 when the field label exists in the document but the value is missing or unreadable.\n"
+        "  Example: if Ship Via label does not appear anywhere → null, 1.0\n"
+        "  Example: if Ship Via label appears but value is blank → null, 0.0\n"
         "IMPORTANT: If a requested field has an exact matching value elsewhere in the document and the value is clearly applicable to that field, assign confidence 1.0 even if the value is duplicated under another field.\n"
         "IMPORTANT: Duplicate values across fields must NOT reduce confidence. If Supplier Phone and Ship To Phone contain the same phone number, and the number is clearly applicable to both fields, both fields must have confidence 1.0.\n"
         "COLUMN SEPARATION RULES:\n"
