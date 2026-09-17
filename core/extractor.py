@@ -102,8 +102,48 @@ def _normalize_response(data: dict, positions: dict, estimate_confidence: bool =
             normalized[key] = {"value": val, "confidence": conf}
 
     normalized["line_items"] = data.get("line_items", [])
-    return normalized
 
+    # If the same value is explicitly extracted for multiple header fields,
+    # treat the duplicate occurrence as high-confidence as well.
+    header_values = {}
+
+    for field, result in normalized.items():
+        if field == "line_items":
+            continue
+
+        if isinstance(result, dict):
+            value = result.get("value")
+
+            if value is not None and str(value).strip():
+                normalized_value = re.sub(r"[^a-zA-Z0-9]", "", str(value)).lower()
+
+                if normalized_value:
+                    header_values.setdefault(normalized_value, []).append(field)
+
+    # Duplicate values across different header fields are valid.
+    # Example: Supplier Phone == Ship To Phone.
+    for normalized_value, fields in header_values.items():
+        if len(fields) > 1:
+            for field in fields:
+                if isinstance(normalized[field], dict):
+                    normalized[field]["confidence"] = 1.0
+    for key, label, *_ in positions["header_fields"]:
+        val = (
+            flat.get(key)
+            or response_loose.get(_loose(key))
+            or response_loose.get(_loose(label))
+        )
+        if isinstance(val, dict) and "value" in val:
+            normalized[key] = val
+            # ── Fix: null value with 0% → change to 100% ──────────────────
+            if normalized[key].get("value") is None and normalized[key].get("confidence") == 0.0:
+                normalized[key]["confidence"] = 1.0
+        else:
+            conf = _estimate_confidence(val) if estimate_confidence else None
+            normalized[key] = {"value": val, "confidence": conf}
+
+    normalized["line_items"] = data.get("line_items", [])
+    return normalized   
 
 def _estimate_confidence(val) -> float | None:
     if val is None:
@@ -154,11 +194,38 @@ def _build_schema_instruction(positions: dict) -> str:
         "  ]\n"
         "}\n\n"
         "Confidence scoring rules:\n"
-        "  1.0 = clearly and explicitly stated\n"
-        "  0.7 = present but partially ambiguous\n"
-        "  0.4 = inferred or uncertain\n"
-        "  0.0 = not found (set value to null)\n"
-        "Use null for any field value not found."
+        "  1.0 = value clearly and explicitly stated in the document\n"
+        "  1.0 = field is genuinely absent from this PO type (set value to null, confidence 1.0)\n"
+        "  0.7 = value is present but partially ambiguous or unclear\n"
+        "  0.4 = value is inferred or uncertain\n"
+        "  0.0 = field should exist in this PO but could not be read or was illegible\n"
+        "\n"
+        "IMPORTANT CONFIDENCE RULE:\n"
+        "  If a field is simply not present anywhere in the document — not mentioned, not labelled,\n"
+        "  not implied — set value to null AND confidence to 1.0.\n"
+        "  Only use 0.0 when the field label exists in the document but the value is missing or unreadable.\n"
+        "  Example: if Ship Via label does not appear anywhere → null, 1.0\n"
+        "  Example: if Ship Via label appears but value is blank → null, 0.0\n"
+        "IMPORTANT: If a requested field has an exact matching value elsewhere in the document and the value is clearly applicable to that field, assign confidence 1.0 even if the value is duplicated under another field.\n"
+        "IMPORTANT: Duplicate values across fields must NOT reduce confidence. If Supplier Phone and Ship To Phone contain the same phone number, and the number is clearly applicable to both fields, both fields must have confidence 1.0.\n"
+        "COLUMN SEPARATION RULES:\n"
+        "  - The terms table has 4 columns: Terms | Expected Date | Ship Via | FOB\n"
+        "  - Extract each column value independently — never merge adjacent column values\n"
+        "  - FOB contains only the delivery point (e.g. 'Your Shop') — not the shipping method\n"
+        "  - Ship Via contains only the shipping method (e.g. 'best way') — not FOB\n"
+        "  - Ship Via may contain multiple words including 'pp & c' — this is valid and complete\n"
+        "  - Do not penalise confidence for Ship Via containing 'pp & c' — it is part of the shipping method\n"
+        "IMPORTANT — FIELD EXTRACTION RULES:\n"
+        "  1. Treat every header field as an independent field.\n"
+        "  2. Search the entire purchase order for each requested field before deciding it is missing.\n"
+        "  3. If the same value appears multiple times and is explicitly associated with multiple fields, extract it into EVERY applicable field.\n"
+        "  4. Never leave a field null simply because the same value was already extracted for another field.\n"
+        "  5. Do not deduplicate values across different fields. Duplicate values are valid and expected.\n"
+        "  6. For example, if Supplier Phone and Ship To Phone contain the same phone number, populate BOTH fields with that phone number.\n"
+        "  7. The same rule applies to repeated addresses, dates, IDs, currencies, names, or other values when they are explicitly associated with different fields.\n"
+        "  8. Use null ONLY when the requested field cannot be found anywhere in the document.\n"
+        "DUPLICATE FIELD EXAMPLE:\n"
+        "If Supplier Phone is 877-624-5757 and Ship To Phone is also 877-624-5757, return 877-624-5757 for BOTH fields. Do not set Ship To Phone to null because the value is duplicated."
     )
 
 
