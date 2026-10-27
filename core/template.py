@@ -30,19 +30,32 @@ def is_skipped(label: str, skip_labels: set, skip_prefixes: tuple) -> bool:
 
 
 def scan_template(template_path: str, cfg: dict) -> dict:
-    """
-    Scan a customer Excel template and return all field positions.
-    Returns:
-        header_fields:  [(key, label, row, value_col, conf_col)]
-        li_fields:      [(key, label, col_number)]
-        li_header_row:  int | None
-    """
     from openpyxl import load_workbook
 
     sheet_name    = cfg["template"]["sheet_name"]
     anchor        = cfg["template"]["line_items_anchor"]
     skip_labels   = set(cfg["template"]["skip_labels"])
     skip_prefixes = tuple(cfg["template"]["skip_prefixes"])
+
+    # ── Multiple anchor candidates — tries config anchor first, then fallbacks
+    anchor_candidates = {
+        normalize(a) for a in [
+            anchor,
+            "No.", "Ln", "Qty", "Qty.", "Quantity", "Quantity Unit",
+            "Item", "Item No.", "Item No", "Item Number",
+            "Part No.", "Part No", "Part Number", "Part #",
+            "PART #",                          # ← exact match for this PO
+            "PART NUMBER", "PART NO",          # ← variations
+            "Line", "Line No.", "Line No",
+            "Order Qty", "Order Quant", "Ordered",
+            "Description", "EDP Code/Description",
+            "line", "PART NUMBER DESCRIPTION",
+            "QTY",                             # ← also in this PO's header row
+            "UoM", "UOM", "U/M",              # ← unit of measure variations
+            "Unit Price", "UNIT PRICE",        # ← also in header
+            "Price", "PRICE",     
+        ]
+    }
 
     LABEL_TO_VALUE = {1: 2, 4: 5}
 
@@ -54,6 +67,33 @@ def scan_template(template_path: str, cfg: dict) -> dict:
     li_fields     = []
     seen_keys     = set()
 
+    # ── Two-pass: first find the line items header row ────────────────────────
+    # Pass 1 — find li_header_row by scanning for any anchor candidate
+    # that appears in a row with multiple columns (i.e. a table header row)
+    candidate_rows: dict[int, int] = {}  # row → count of anchor matches in that row
+
+    for row in ws.iter_rows():
+        row_matches = 0
+        for cell in row:
+            if not cell.value or not isinstance(cell.value, str):
+                continue
+            if normalize(cell.value) in anchor_candidates:
+                row_matches += 1
+        if row_matches > 0:
+            candidate_rows[row[0].row] = row_matches
+
+    # Pick the row with the most anchor matches — that's the line items header
+    if candidate_rows:
+        li_header_row = max(candidate_rows, key=candidate_rows.get)
+        print(f"  [scan] Line items header row detected: {li_header_row}")
+    else:
+        print(f"  [scan] WARNING: Line items table not found in template — skipping.")
+
+    # Pass 2 — extract header fields and line item columns
+    wb.close()
+    wb = load_workbook(template_path, read_only=True)
+    ws = wb[sheet_name]
+
     for row in ws.iter_rows():
         for cell in row:
             if not cell.value or not isinstance(cell.value, str):
@@ -62,9 +102,6 @@ def scan_template(template_path: str, cfg: dict) -> dict:
             label = normalize(cell.value)
             if not label or is_skipped(label, skip_labels, skip_prefixes):
                 continue
-
-            if label == normalize(anchor):
-                li_header_row = cell.row
 
             if li_header_row and cell.row == li_header_row:
                 key = label_to_key(label)
@@ -90,8 +127,6 @@ def scan_template(template_path: str, cfg: dict) -> dict:
         "li_fields":     li_fields,
         "li_header_row": li_header_row,
     }
-
-
 def find_template_by_company(company_name: str, template_dir: str) -> dict:
     """
     Fuzzy-match company name against template filenames in template_dir.

@@ -8,10 +8,7 @@ folders:
 security:
   enabled: true
   usage_log: "C:/Users/nakul/Downloads/po_usage_log.xlsx"
-  tokens:
-    "364ecb993b7de7e25b2df125263993526da904c461f18a9418b7ea8ab8c72713": "nakul"
-    "YOUR_MANAGER_TOKEN_HASH_HERE": "manager"
-
+  
 template:
   sheet_name:        "PO Summary"
   line_items_anchor: "Quantity"
@@ -33,16 +30,16 @@ models:
   mistral_azure:
     provider:     mistral_azure
     display_name: "Mistral Document AI (Azure)"
-    endpoint:     "https://idp--trial-resource.services.ai.azure.com/providers/mistral/azure/ocr"
-    api_key:      "4e6zHtAGe6xWW4H46aAkoezXCJB21YWAVSzhZ7WfwVAPtsHHTQkgJQQJ99CCACHYHv6XJ3w3AAAAACOGNQ9G"
+    endpoint:     "https://idp-azure-repo-resource.services.ai.azure.com/providers/mistral/azure/ocr"
+    api_key:      "9d3sc9IC1lyeRpm8E508cupcZVIOp169TAQw85cRs5KROMhWSSO7JQQJ99CEACfhMk5XJ3w3AAAAACOGK0hx"
     model_name:   "mistral-document-ai-2512"
     timeout:      300
     retries:      3
 
   cohere_azure:
     provider:     cohere_azure
-    display_name: "Cohere Command R+ (Azure)"
-    endpoint:     "https://idp-azure-repo-resource.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
+    display_name: "Cohere Command A(Azure)"
+    endpoint:     "https://idp-azure-repo-resource.services.ai.azure.com/openai/v1/chat/completions"
     api_key:      "9d3sc9IC1lyeRpm8E508cupcZVIOp169TAQw85cRs5KROMhWSSO7JQQJ99CEACfhMk5XJ3w3AAAAACOGK0hx"
     model_name:   "cohere-command-a"
     timeout:      120
@@ -56,3 +53,12 @@ models:
     model_name:   "Llama-4-Scout-17B-16E-Instruct"
     timeout:      120
     retries:      3
+  
+  gpt4o_azure:
+    provider:     openai_azure_responses
+    display_name: "GPT-5.4 (Azure)"
+    endpoint: "https://idp-azure-repo-resource.services.ai.azure.com/openai/v1/responses"
+    api_key: "9d3sc9IC1lyeRpm8E508cupcZVIOp169TAQw85cRs5KROMhWSSO7JQQJ99CEACfhMk5XJ3w3AAAAACOGK0hx"
+    model_name: "gpt-5.4-2"
+    timeout: 120
+    retries: 3

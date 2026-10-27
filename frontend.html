@@ -296,7 +296,7 @@
 </main>
 
 <script>
-const API = 'http://localhost:8000';
+const API = 'https://h2xtwhtb-8000.euw.devtunnels.ms';
 const REPO = 'azure';
 const BADGE = 'Azure';
 const ACCENT_CSS = '#0078d4';
@@ -390,8 +390,10 @@ async function detectCompany() {
       tmplEl.innerHTML = 'Template matched: <span>' + data.template_name + '</span> (score: ' + data.match_score + ')';
       document.getElementById('templatePath').value = data.template_path;
     } else {
-      tmplEl.innerHTML = '<span style="color:var(--danger)">No template matched.</span> Available: ' + ((data.all_templates||[]).join(', ') || 'none');
+      tmplEl.innerHTML = '<span style="color:var(--danger)">No template matched.</span>';
+    document.getElementById('templatePath').value = '';
     }
+
     document.getElementById('step2Fields').style.display = 'flex';
     document.getElementById('step1dot').className = 'step-dot done';
     document.getElementById('stepLine').className = 'step-line done';
