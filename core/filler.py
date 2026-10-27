@@ -49,8 +49,25 @@ def _resolve_cell(ws, row: int, col: int):
     return ws.cell(row, col)
 
 
+import re
+
+TEMPLATE_NOISE = {
+    "purchase order extracted data",
+    "purchase order — extracted data",
+    "purchase order - extracted data",
+    "line items", "field", "value", "confidence",
+}
+
 def _write(ws, row: int, col: int, value, fill: PatternFill | None = None) -> None:
     cell = _resolve_cell(ws, row, col)
+    
+    if isinstance(value, str):
+        # Strip XML illegal characters
+        value = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', value)
+        # Reject template structural labels echoed back by model
+        if value.lower().strip() in TEMPLATE_NOISE:
+            value = None
+
     cell.value = value
     if fill:
         cell.fill = fill
@@ -100,7 +117,8 @@ def fill_template(
                     if key == "confidence":
                         _write(ws, r, col, conf_label(conf), fill=fill)
                     else:
-                        val = item.get(key)
+                        raw = item.get(key)
+                        val = raw["value"] if isinstance(raw, dict) and "value" in raw else raw
                         _write(ws, r, col, str(val) if val is not None else "", fill=fill)
 
         wb.save(tmp_path)

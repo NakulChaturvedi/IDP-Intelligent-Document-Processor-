@@ -86,6 +86,9 @@ def _normalize_response(data: dict, positions: dict, estimate_confidence: bool =
         return data
 
     flat           = _unwrap(data)
+    for k, v in flat.items():
+        if "reference" in k.lower() or "order_no" in k.lower():
+            print(f"  [debug raw model output] {k} = {v}")
     response_loose = {_loose(k): v for k, v in flat.items()}
     normalized     = {}
 
@@ -97,6 +100,8 @@ def _normalize_response(data: dict, positions: dict, estimate_confidence: bool =
         )
         if isinstance(val, dict) and "value" in val:
             normalized[key] = val
+            if normalized[key].get("value") is None and normalized[key].get("confidence") == 0.0:
+                normalized[key]["confidence"] = 1.0
         else:
             conf = _estimate_confidence(val) if estimate_confidence else None
             normalized[key] = {"value": val, "confidence": conf}
@@ -127,23 +132,9 @@ def _normalize_response(data: dict, positions: dict, estimate_confidence: bool =
             for field in fields:
                 if isinstance(normalized[field], dict):
                     normalized[field]["confidence"] = 1.0
-    for key, label, *_ in positions["header_fields"]:
-        val = (
-            flat.get(key)
-            or response_loose.get(_loose(key))
-            or response_loose.get(_loose(label))
-        )
-        if isinstance(val, dict) and "value" in val:
-            normalized[key] = val
-            # ── Fix: null value with 0% → change to 100% ──────────────────
-            if normalized[key].get("value") is None and normalized[key].get("confidence") == 0.0:
-                normalized[key]["confidence"] = 1.0
-        else:
-            conf = _estimate_confidence(val) if estimate_confidence else None
-            normalized[key] = {"value": val, "confidence": conf}
 
-    normalized["line_items"] = data.get("line_items", [])
-    return normalized   
+    return normalized
+
 
 def _estimate_confidence(val) -> float | None:
     if val is None:
@@ -154,6 +145,156 @@ def _estimate_confidence(val) -> float | None:
     if len(s) < 2:
         return 0.4
     return 0.85
+
+
+def _is_missing_header_value(value) -> bool:
+    """Return True when an extracted header value is effectively empty."""
+    if value is None:
+        return True
+    text = str(value).strip().lower()
+    return not text or text in {"null", "none", "n/a", "na", "-", "—"}
+
+
+def _value_search_text(value: Any) -> str:
+    """Normalize a value for duplicate-value matching in OCR/PDF text."""
+    return re.sub(r"\s+", " ", str(value or "")).strip().lower()
+
+
+def _duplicate_value_present_in_document(value: Any, document_text: str) -> bool:
+    """
+    Check whether a non-empty extracted value occurs at least twice in the
+    document. Two occurrences are important: one can belong to the source
+    field and the second can be the duplicated value for the missing field.
+    """
+    if _is_missing_header_value(value):
+        return False
+
+    value_text = _value_search_text(value)
+    document_text = _value_search_text(document_text)
+    if not value_text or not document_text:
+        return False
+
+    # Exact text match first (preserves formatted values such as 877-624-5757).
+    if document_text.count(value_text) >= 2:
+        return True
+
+    # Phone numbers are often formatted differently by OCR, e.g.
+    # 877-624-5757 vs 8776245757. Match their digits instead.
+    digits = re.sub(r"\D", "", value_text)
+    if len(digits) >= 7:
+        digit_text = re.sub(r"\D", "", document_text)
+        return digit_text.count(digits) >= 2
+
+    return False
+
+
+def _field_family(key: str, label: str) -> str:
+    """
+    Classify header fields so a duplicated value is only copied between
+    semantically compatible fields. Line items are deliberately excluded.
+    """
+    text = f"{key} {label}".lower()
+    if re.search(r"\b(phone|telephone|tel)\b", text):
+        return "phone"
+    if re.search(r"\bfax\b", text):
+        return "fax"
+    if re.search(r"\b(email|e-mail)\b", text):
+        return "email"
+    if re.search(r"\b(address|addr)\b", text):
+        return "address"
+    if re.search(r"\b(date|day)\b", text):
+        return "date"
+    if re.search(r"\b(id|identifier|number|no\.?|#)\b", text):
+        return "id_or_number"
+    if re.search(r"\bcurrency\b", text):
+        return "currency"
+    if re.search(r"\b(terms|payment)\b", text):
+        return "terms"
+    return "other"
+
+
+def _apply_duplicate_header_fallback(
+    result: dict,
+    pdf_path: str,
+    positions: dict = None,
+) -> dict:
+    """
+    Fill missing HEADER fields when the same explicitly extracted value
+    appears more than once in the source document.
+
+    This is intentionally a post-processing safeguard rather than another
+    prompt instruction. It does NOT inspect or modify ``line_items``.
+
+    Example:
+        Supplier Phone = 8776245757
+        Ship To Phone = null
+
+    If 8776245757 occurs twice in the PDF, Ship To Phone is populated with
+    the same value and a high confidence score.
+
+    Values are only copied between compatible field families (phone->phone,
+    date->date, address->address, etc.) to avoid blindly copying unrelated
+    duplicate numbers.
+    """
+    if not isinstance(result, dict) or not positions:
+        return result
+
+    try:
+        document_text = _extract_pdf_text(pdf_path)
+    except Exception as exc:
+        print(f"  [duplicate-header-fallback] Could not read PDF text: {exc}")
+        return result
+
+    header_fields = positions.get("header_fields", [])
+    if not header_fields or not document_text:
+        return result
+
+    # Collect existing non-empty header values.
+    existing = []
+    for key, label, *_ in header_fields:
+        field = result.get(key)
+        value = field.get("value") if isinstance(field, dict) else field
+        if _is_missing_header_value(value):
+            continue
+        existing.append((key, label, value, _field_family(key, label)))
+
+    changes = []
+
+    for target_key, target_label, *_ in header_fields:
+        target = result.get(target_key)
+        target_value = target.get("value") if isinstance(target, dict) else target
+
+        # Never overwrite a value that the model already extracted.
+        if not _is_missing_header_value(target_value):
+            continue
+
+        target_family = _field_family(target_key, target_label)
+        if target_family not in {"phone", "fax", "email", "address"}:
+            continue
+        candidates = []
+
+        for source_key, source_label, source_value, source_family in existing:
+            if source_key == target_key or source_family != target_family:
+                continue
+            if _duplicate_value_present_in_document(source_value, document_text):
+                candidates.append((source_key, source_label, source_value))
+
+        # Only fill when exactly one compatible duplicate candidate exists.
+        # This avoids making a guess when multiple different values are present.
+        if len(candidates) == 1:
+            source_key, source_label, source_value = candidates[0]
+            result[target_key] = {
+                "value": source_value,
+                "confidence": 1.0,
+            }
+            changes.append(
+                f"{target_key} <- {source_key} ({source_value!r})"
+            )
+
+    if changes:
+        print("  [duplicate-header-fallback] Filled: " + ", ".join(changes))
+
+    return result
 
 
 def _extract_pdf_text(pdf_path: str) -> str:
@@ -194,12 +335,11 @@ def _build_schema_instruction(positions: dict) -> str:
         "  ]\n"
         "}\n\n"
         "Confidence scoring rules:\n"
-        "  1.0 = value clearly and explicitly stated in the document\n"
-        "  1.0 = field is genuinely absent from this PO type (set value to null, confidence 1.0)\n"
-        "  0.7 = value is present but partially ambiguous or unclear\n"
-        "  0.4 = value is inferred or uncertain\n"
-        "  0.0 = field should exist in this PO but could not be read or was illegible\n"
-        "\n"
+        "  1.0 = the value is clearly present anywhere in the document and can be confidently assigned to the requested field.\n"
+        "  0.7 = the value is present but its association with the requested field is somewhat ambiguous.\n"
+        "  0.4 = the value is only inferred or uncertain.\n"
+        "  0.0 = the value cannot be found anywhere in the document; in this case set the value to null.\n"
+        "IMPORTANT: If a requested field has an exact matching value elsewhere in the document and the value is clearly applicable to that field, assign confidence 1.0 even if the value is duplicated under another field.\n"
         "IMPORTANT CONFIDENCE RULE:\n"
         "  If a field is simply not present anywhere in the document — not mentioned, not labelled,\n"
         "  not implied — set value to null AND confidence to 1.0.\n"
@@ -234,9 +374,10 @@ def _build_schema_instruction(positions: dict) -> str:
 def detect_company_from_pdf(pdf_path: str, model_cfg: dict = None) -> str:
     """
     Extract the buying/issuing company name from a PO PDF using text parsing.
-    No model call needed — reads first meaningful line or Ship To section.
+    Prioritizes company names near the top of the first page.
     """
     import pdfplumber
+    import re
 
     skip_words = {
         "purchase order", "invoice", "quotation", "quote", "sales order",
@@ -244,61 +385,182 @@ def detect_company_from_pdf(pdf_path: str, model_cfg: dict = None) -> str:
         "purchase order number", "purchase order date page", "ship to",
         "vendor address", "vendor", "supplier", "bill to", "sold to",
         "reference", "terms", "ship via", "currency", "buyer name",
+        "send to", "sold by",
     }
 
     with pdfplumber.open(pdf_path) as pdf:
         text = pdf.pages[0].extract_text() or ""
 
-    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
 
     def is_company_line(line):
+        lower = line.lower().strip().rstrip(":")
+
         if len(line) < 4:
             return False
-        if re.match(r'^[\d\s\/\-\.\,]+$', line):
+
+        if lower in skip_words:
             return False
-        if line.lower().rstrip(":") in skip_words:
+
+        # Reject lines containing only numbers and address punctuation.
+        if re.fullmatch(r"[\d\s/.,#-]+", line):
             return False
-        if any(line.lower().startswith(w) for w in
-               ["phone", "fax", "attn", "http", "www", "po box", "p.o. box", "gst", "hst", "pst"]):
-            return False
-        if re.search(r'\d{3,}', line) and any(
-            w in line.lower() for w in ["st.", "ave", "blvd", "rd", "drive", "way"]
+
+        # Reject phone numbers, URLs, and common address labels.
+        if re.match(
+            r"^(phone|fax|attn|http|www|po box|p\.o\. box|"
+            r"gst|hst|pst)\b",
+            lower,
         ):
             return False
+
+        # Reject street-address patterns such as "235 W 2950 S".
+        if re.match(
+            r"^\d+\s+[NSEW]\s+\d+\s+[NSEW]$",
+            line,
+            re.IGNORECASE,
+        ):
+            return False
+
+        # Reject common street addresses.
+        if re.search(
+            r"\b(street|st\.|avenue|ave\.|road|rd\.|"
+            r"boulevard|blvd\.|drive|dr\.|lane|ln\.|way)\b",
+            lower,
+        ):
+            return False
+
         return True
 
-    # Strategy 1 — company name near top of document
-    for line in lines[:10]:
-        if is_company_line(line):
-            if (re.search(r'\b(inc|ltd|llc|corp|limited|company|consultants|associates|brooks)\b',
-                          line, re.IGNORECASE)
-                    or (line.isupper() and len(line.split()) >= 2)):
-                cleaned = re.sub(
-                    r'\s+(purchase\s+order|invoice|quotation|order|po|page|date).*$',
-                    '', line, flags=re.IGNORECASE
-                ).strip()
+    # Strategy 1: Look for a company name near the top of the document.
+    for line in lines[:12]:
+        if not is_company_line(line):
+            continue
+
+        # Prefer names containing clear company identifiers.
+        if re.search(
+            r"\b(inc\.?|ltd\.?|llc|corp\.?|corporation|"
+            r"limited|company|associates)\b",
+            line,
+            re.IGNORECASE,
+        ):
+            cleaned = re.sub(
+                r"\s+(purchase\s+order|invoice|quotation|order|po|page|date).*$",
+                "",
+                line,
+                flags=re.IGNORECASE,
+            ).strip()
+
+            if cleaned:
                 return cleaned
 
-    # Strategy 2 — find Ship To label
-    for i, line in enumerate(lines):
-        if re.search(r'ship\s*to', line, re.IGNORECASE):
-            parts = re.split(r'ship\s*to\s*:?\s*', line, flags=re.IGNORECASE)
-            if len(parts) > 1 and is_company_line(parts[-1].strip()):
-                return parts[-1].strip()
-            for j in range(i + 1, min(i + 4, len(lines))):
-                candidate = lines[j].strip()
-                parts = re.split(r'\s{3,}|\t', candidate)
-                right = parts[-1].strip() if len(parts) >= 2 else candidate
-                if is_company_line(right):
-                    return right
-
-    # Strategy 3 — first meaningful line
-    for line in lines:
+    # Strategy 2: Check the first few meaningful lines for a company name.
+    for line in lines[:6]:
         if is_company_line(line):
+            # Avoid returning address fragments or document headings.
+            if re.search(r"[A-Za-z]", line) and not re.search(
+                r"\b(inc\.?|ltd\.?|llc|corp\.?|corporation|"
+                r"limited|company|associates)\b",
+                line,
+                re.IGNORECASE,
+            ):
+                if len(line.split()) >= 2 and not re.search(
+                    r"\d{3,}", line
+                ):
+                    return line
+
+    # Strategy 3: Find the Ship To section as a fallback.
+    for i, line in enumerate(lines):
+        if re.search(r"\bship\s*to\b", line, re.IGNORECASE):
+            for candidate in lines[i + 1:i + 5]:
+                if is_company_line(candidate):
+                    if re.search(r"[A-Za-z]", candidate):
+                        return candidate
+
+    # Strategy 4: Return the first meaningful text line as a last resort.
+    for line in lines:
+        if is_company_line(line) and re.search(r"[A-Za-z]", line):
             return line
 
     return ""
 
+
+def download_from_sharepoint(url: str, output_dir: str = None) -> str:
+    import tempfile, re, time, urllib.parse
+    import requests as req
+
+    download_url = url + ("&download=1" if "?" in url else "?download=1")
+
+    # Ensure output dir exists
+    if output_dir:
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+    out_dir = output_dir or tempfile.gettempdir()
+
+    print(f"  Downloading from SharePoint: {url[:50]}...")
+    r = req.get(download_url, timeout=60)
+    if r.status_code != 200:
+        raise RuntimeError(f"Failed to download from SharePoint [{r.status_code}]")
+
+    content_type = r.headers.get("Content-Type", "")
+    print(f"  [sharepoint] Content-Type: {content_type!r}")
+
+    # ── Step 1: Try Content-Disposition header ────────────────────────────────
+    cd    = r.headers.get("Content-Disposition", "")
+    match = re.search(r'filename\*?=["\']?(?:UTF-8\'\')?([^"\';\r\n]+)', cd, re.IGNORECASE)
+    filename = match.group(1).strip() if match else ""
+
+    # ── Step 2: Try extracting filename from URL path ─────────────────────────
+    if not filename or filename in ("download", ""):
+        parsed     = urllib.parse.urlparse(url)
+        path_parts = parsed.path.split("/")
+        for part in reversed(path_parts):
+            decoded = urllib.parse.unquote(part)
+            if decoded.endswith((".xlsx", ".pdf", ".xlsm")):
+                filename = decoded
+                break
+
+    # ── Step 3: Final fallback — use content type ─────────────────────────────
+    if not filename or filename in ("download", ""):
+        if "spreadsheet" in content_type or "excel" in content_type:
+            ext = ".xlsx"
+        elif "pdf" in content_type:
+            ext = ".pdf"
+        else:
+            ext = ".xlsx" if ":x:" in url else ".pdf"
+        filename = f"sp_download_{int(time.time())}{ext}"
+
+    # ── Step 4: Force correct extension based on Content-Type ─────────────────
+    if "spreadsheet" in content_type or "excel" in content_type:
+        if not filename.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
+            filename = Path(filename).stem + ".xlsx"
+
+    # ── Step 5: Force .xlsx if saving to templates folder ────────────────────
+    if output_dir and "template" in output_dir.lower():
+        if not filename.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
+            filename = Path(filename).stem + ".xlsx"
+    # ── Validate content is actually a file, not HTML ─────────────────────────
+    if r.content[:5] in (b'<!DOC', b'<html', b'<HTML'):
+        raise RuntimeError(
+            "SharePoint returned a login/redirect page instead of the file. "
+            "Open the sharing link in a private browser window — if it asks you "
+            "to sign in, go to SharePoint → right-click file → Share → "
+            "change to 'Anyone with the link can view' → copy the new link."
+        )
+
+    if filename.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
+        if r.content[:2] != b'PK':
+            raise RuntimeError(
+                f"Downloaded content is not a valid Excel file. "
+                f"First bytes: {r.content[:20]!r}. "
+                "The SharePoint link may require authentication."
+            )
+
+    save_path = str(Path(out_dir) / filename)
+    with open(save_path, "wb") as f:
+        f.write(r.content)
+
+    print(f"  [sharepoint] Saved as: {save_path}")
+    return save_path
 
 # ── Mistral Azure — Document AI with chat completions fallback ─────────────────
 
@@ -351,7 +613,8 @@ def _extract_mistral_azure(pdf_path: str, model_cfg: dict, prompt: str, position
 
         if ann:
             result = json.loads(ann) if isinstance(ann, str) else ann
-            return _normalize_response(result, positions, estimate_confidence=False)
+            result = _normalize_response(result, positions, estimate_confidence=False)
+            return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
         # Annotation empty — extract OCR text from pages for fallback
         print("  [mistral_azure] No document_annotation in response — falling back to OCR text + chat")
@@ -402,11 +665,42 @@ def _extract_mistral_azure(pdf_path: str, model_cfg: dict, prompt: str, position
         )
         return resp.text, resp.status_code
 
-    raw, _  = _retry(call_chat, model_cfg.get("retries", 3))
-    data    = json.loads(raw)
-    content = data["choices"][0]["message"]["content"]
-    result  = _parse_json(content)
-    return _normalize_response(result, positions, estimate_confidence=False)
+    raw, status = _retry(call, model_cfg.get("retries", 3))
+
+    # Check whether the API returned an empty response
+    if not raw or not raw.strip():
+        raise RuntimeError(
+            f"Azure API returned an empty response (HTTP {status}). "
+            "Check the model deployment, endpoint, and API response."
+        )
+
+    # Parse the API response and expose the actual error if it isn't JSON
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Azure API returned invalid JSON (HTTP {status}). "
+            f"Response preview: {raw[:500]!r}"
+        ) from exc
+
+    # Validate the expected chat-completions response structure
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(
+            "Unexpected Azure API response structure. "
+            f"Response preview: {raw[:500]!r}"
+        ) from exc
+
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError(
+            "Azure model returned empty message content. "
+            f"Response preview: {raw[:500]!r}"
+        )
+
+    result = _parse_json(content)
+    result = _normalize_response(result, positions, estimate_confidence=False)
+    return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
 
 def _build_mistral_schema(positions: dict) -> dict:
@@ -497,7 +791,8 @@ def _extract_openai_azure(pdf_path: str, model_cfg: dict, prompt: str, positions
     data    = json.loads(raw)
     content = data["choices"][0]["message"]["content"]
     result  = _parse_json(content)
-    return _normalize_response(result, positions, estimate_confidence=False)
+    result = _normalize_response(result, positions, estimate_confidence=False)
+    return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
 
 # ── Phi Azure — Azure AI chat completions ─────────────────────────────────────
@@ -545,7 +840,8 @@ def _extract_phi_azure(pdf_path: str, model_cfg: dict, prompt: str, positions: d
     data    = json.loads(raw)
     content = data["choices"][0]["message"]["content"]
     result  = _parse_json(content)
-    return _normalize_response(result, positions, estimate_confidence=False)
+    result = _normalize_response(result, positions, estimate_confidence=False)
+    return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
 
 # ── Llama Azure — Azure AI chat completions ───────────────────────────────────
@@ -557,8 +853,45 @@ def _extract_llama_azure(pdf_path: str, model_cfg: dict, prompt: str, positions:
     li_list = ""
     if positions:
         li_list = "\n".join(
-            f'- "{k}": {l}' for k, l, _ in positions["li_fields"]
+            f'- "{k}": {l}'
+            for k, l, _ in positions["li_fields"]
             if k != "confidence"
+        )
+
+    # Build template-specific line-item layout hints
+    li_field_keys = [
+        k for k, _, _ in positions["li_fields"]
+    ] if positions else []
+
+    layout_hints = []
+
+    if any(
+        k in ("part_number_description", "part_number", "description")
+        for k in li_field_keys
+    ):
+        layout_hints.append(
+            "- LINE ITEM COLUMN SEPARATION — CRITICAL:\n"
+            "  Extract the part number and description into separate fields "
+            "whenever the schema provides separate fields.\n"
+            "  PART NUMBER is the item code, e.g. '2K1201'.\n"
+           "- Fields like Reference, Tax ID#, Expected Arrival may be blank in this PO\n"
+           "  If a field label has no adjacent value, return null — do NOT use page numbers, "
+           "  quantities, or other nearby numbers as the value\n"
+           "  A value of '1' for Reference, Tax ID, or Expected Arrival is almost certainly wrong — set null"
+            "  DESCRIPTION is the product name, e.g. 'IMPELLER, 5 - 3/16\" DIA'.\n"
+            "  For this row, return part_number='2K1201' and "
+            "description='IMPELLER, 5 - 3/16\" DIA'.\n"
+            "Do not reverse the part number and description.\n"
+            "Keep LOC., OUR REF #, QTY REQ., UOM, UNIT PRICE and EXT PRICE "
+            "in their respective columns. Never merge adjacent columns."
+            "- This PO has a 6-column terms row: "
+            "Reference | Tax ID# | Expected Arrival | Ship Via | FOB | Terms\n"
+            "  Reference, Tax ID#, and Expected Arrival may be blank — set them to null\n"
+            "  Do NOT shift values left to fill blank columns\n"
+            "  Ship Via contains the shipping method (e.g. 'Ship Best Weight Method')\n"
+            "  FOB contains the delivery point (e.g. 'Your dock')\n"
+            "  Terms contains payment terms (e.g. 'Net 30 Days')\n"
+            "  If a column is blank, its value is null — never borrow from the next column"
         )
 
     headers = {
@@ -567,14 +900,17 @@ def _extract_llama_azure(pdf_path: str, model_cfg: dict, prompt: str, positions:
     }
 
     full_prompt = (
-        f"{prompt}\n\n{schema_instruction}\n\n"
-        "CRITICAL — LINE ITEMS:\n"
-        "You MUST extract every single product row from the table.\n"
-        "Count the rows in the table and make sure your line_items array has the same count.\n"
-        f"Each line item must have these fields:\n{li_list}\n\n"
-        "Return ONLY valid JSON — no explanation, no markdown.\n\n"
-        f"PURCHASE ORDER TEXT:\n{text}"
-    )
+    f"{prompt}\n\n"
+    f"{schema_instruction}\n\n"
+    "CRITICAL — LINE ITEMS:\n"
+    "You MUST extract every single product row from the table.\n"
+    "Even if 'Supplier Phone' and 'Ship To Phone' are the same, extract both.\n"
+    "Count the rows in the table and make sure your line_items array has the same count.\n"
+    f"Each line item must have these fields:\n{li_list}\n\n"
+    + "\n".join(layout_hints)
+    + "\n\nReturn ONLY valid JSON — no explanation, no markdown.\n\n"
+    f"PURCHASE ORDER TEXT:\n{text}"
+)
 
     payload = {
         "model":    model_cfg["model_name"],
@@ -602,7 +938,8 @@ def _extract_llama_azure(pdf_path: str, model_cfg: dict, prompt: str, positions:
     data    = json.loads(raw)
     content = data["choices"][0]["message"]["content"]
     result  = _parse_json(content)
-    return _normalize_response(result, positions, estimate_confidence=True)
+    result = _normalize_response(result, positions, estimate_confidence=True)
+    return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
 # ── OpenAI Azure — Responses API (/v1/responses endpoint) ────────────────────
 
@@ -650,22 +987,21 @@ def _extract_openai_azure_responses(pdf_path: str, model_cfg: dict, prompt: str,
         raise RuntimeError(f"Unexpected Responses API response structure: {raw[:300]}")
 
     result = _parse_json(content)
-    return _normalize_response(result, positions, estimate_confidence=False)
-
-# ── Provider registry ──────────────────────────────────────────────────────────
+    result = _normalize_response(result, positions, estimate_confidence=False)
+    return _apply_duplicate_header_fallback(result, pdf_path, positions)
 
 def _extract_cohere_azure(pdf_path: str, model_cfg: dict, prompt: str, positions: dict = None) -> dict:
     """Cohere Command R+ on Azure — same interface as Llama Azure."""
     return _extract_llama_azure(pdf_path, model_cfg, prompt, positions)
-
+# ── Provider registry ──────────────────────────────────────────────────────────
 
 PROVIDERS: dict[str, Any] = {
-    "mistral_azure": _extract_mistral_azure,
-    "openai_azure":  _extract_openai_azure,
-    "openai_azure_responses":  _extract_openai_azure_responses,
-    "phi_azure":     _extract_phi_azure,
-    "llama_azure":   _extract_llama_azure,
-    "cohere_azure":  _extract_cohere_azure,
+    "mistral_azure":          _extract_mistral_azure,
+    "openai_azure":           _extract_openai_azure,
+    "openai_azure_responses": _extract_openai_azure_responses,
+    "phi_azure":              _extract_phi_azure,
+    "llama_azure":            _extract_llama_azure,
+    "cohere_azure":           _extract_cohere_azure,
 }
 
 
